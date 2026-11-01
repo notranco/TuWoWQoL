@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: TuWoW QoL
+## Notes: Mejoras de calidad de vida para TuWoW. Avisos del debuff Putrefacto (vomito), alerta de contagio, deteccion de jugadores cercanos, radar de contagio (solo jugadores cercanos), editor de interfaz y sincronizacion entre usuarios del addon. Configuracion en Interfaz > AddOns.
+## Author: Romero
+## Version: 0.5.1
+## SavedVariables: TuWoWQoLDB
+TuWoWQoL.lua
