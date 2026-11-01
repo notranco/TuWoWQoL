@@ -31,3 +31,5 @@ La detección depende de los hechizos y eventos que exponga el servidor. Puede s
 ## Estado
 
 Versión del addon: **0.5.1**. Esta publicación contiene cambios experimentales; verifica las detecciones dentro del servidor antes de depender de sus alertas.
+
+El código se distribuye bajo la licencia [MIT](LICENSE).
