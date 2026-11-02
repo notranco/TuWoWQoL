@@ -67,6 +67,7 @@ local DEFAULTS = {
     warnAway = true,      -- aviso para mi: alejate de X antes de vomitar
     wideRange = false,    -- true: ~28 yd, false: ~10 yd (radio de contagio por defecto)
     warnUnknown = false,  -- avisar aunque no se pueda medir la distancia
+    silentNameplates = false, -- activar nameplates amistosos y ocultar las placas de jugadores
     alertSeconds = 10,    -- avisar cuando falten estos segundos
     syncEnabled = true,   -- compartir/recibir estado por grupo o banda
     syncNearby = false,   -- tambien por /decir a jugadores cercanos (experimental)
@@ -145,6 +146,9 @@ local infected, nearCD, nearElapsed = {}, {}, 0
 
 -- Otros jugadores (ver seccion "Otros jugadores") y usuarios del addon detectados
 local people, addonUsers = {}, {}
+-- Unidades expuestas por los nameplates de Awesome WotLK (TuWoW).
+local nameplateUnits = {}
+local hiddenNameplateFrames = {}
 local radar
 
 local function DeepCopy(src)
@@ -523,10 +527,68 @@ local function Person(name, src)
     return p
 end
 
--- Devuelve el unitId de un jugador si lo podemos medir (grupo, objetivo, foco, cursor)
+local function RefreshNameplateUnits()
+    -- En algunos clientes los eventos ADDED/REMOVED no reflejan bien los tokens
+    -- reutilizados. Reconcilia el conjunto con los tokens activos antes de medir.
+    local active = {}
+    for i = 1, 40 do
+        local unit = "nameplate" .. i
+        if UnitExists(unit) and UnitIsPlayer(unit) then
+            active[unit] = true
+        end
+    end
+    for unit in pairs(nameplateUnits) do
+        if not active[unit] then nameplateUnits[unit] = nil end
+    end
+    for unit in pairs(active) do nameplateUnits[unit] = true end
+end
+
+local function HideFriendlyNameplate(unit)
+    if not (db and db.silentNameplates and C_NamePlate and C_NamePlate.GetNamePlateForUnit)
+       or not UnitExists(unit) or not UnitIsPlayer(unit) or not UnitIsFriend("player", unit) then return end
+    local ok, plate = pcall(C_NamePlate.GetNamePlateForUnit, unit)
+    if not ok or not plate or not plate.SetAlpha or hiddenNameplateFrames[unit] then return end
+    hiddenNameplateFrames[unit] = { frame = plate, alpha = plate:GetAlpha() }
+    plate:SetAlpha(0)
+end
+
+local function RestoreSilentNameplates(restoreCVar)
+    for unit, saved in pairs(hiddenNameplateFrames) do
+        if saved.frame and saved.frame.SetAlpha then saved.frame:SetAlpha(saved.alpha or 1) end
+        hiddenNameplateFrames[unit] = nil
+    end
+    if restoreCVar and db and db.silentNameplatesOriginal ~= nil and SetCVar then
+        SetCVar("nameplateShowFriends", db.silentNameplatesOriginal)
+        db.silentNameplatesOriginal = nil
+    end
+end
+
+local function SetSilentNameplateMode(enabled, restoreForLogout)
+    if not (C_NamePlate and C_NamePlate.GetNamePlateForUnit and GetCVar and SetCVar) then return end
+    if enabled then
+        if db.silentNameplatesOriginal == nil then
+            db.silentNameplatesOriginal = GetCVar("nameplateShowFriends") or "0"
+        end
+        SetCVar("nameplateShowFriends", "1")
+        for i = 1, 40 do
+            local unit = "nameplate" .. i
+            if UnitExists(unit) then HideFriendlyNameplate(unit) end
+        end
+    else
+        RestoreSilentNameplates(true)
+    end
+    if restoreForLogout then RestoreSilentNameplates(true) end
+end
+
 local function FindUnit(name)
+    RefreshNameplateUnits()
     for _, unit in ipairs(GroupUnits()) do
         if UnitName(unit) == name then return unit end
+    end
+    for unit in pairs(nameplateUnits) do
+        if UnitExists(unit) and UnitIsPlayer(unit) and UnitName(unit) == name then
+            return unit
+        end
     end
     for _, unit in ipairs(EXTRA_UNITS) do
         if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsUnit(unit, "player")
@@ -1127,18 +1189,20 @@ end
 
 local function RadarSort(a, b)
     if a.key ~= b.key then return a.key < b.key end
+    local distanceOrder = { danger = 1, near = 2, unknown = 3, far = 4 }
+    local aDistance = distanceOrder[a.cls or "danger"] or 5
+    local bDistance = distanceOrder[b.cls or "danger"] or 5
+    if aDistance ~= bDistance then return aDistance < bDistance end
     return a.rem < b.rem
 end
 
--- Distancia a mostrar en el radar, o nil si el jugador no esta cerca.
--- Grupo/objetivo/foco/cursor: se mide. Sin unitId (solo combat log o sincronia): se muestra
--- unicamente mientras haya señales recientes (RADAR_FRESH), para que no quede un jugador
--- que ya se fue.
+-- El radar informa la distancia medida aunque quede fuera del radio de alerta.
+-- Sin unitId (solo combat log o sincronía), muestra "?" mientras haya señales recientes.
 local function RadarClass(name, p, now)
     if p.test then return "danger" end
     local cls = DistanceClass(name, p)
     if cls == "danger" then return cls end
-    if cls == "near" then return db.wideRange and cls or nil end
+    if cls == "near" or cls == "far" then return cls end
     if cls == "unknown" and now - (p.seen or 0) <= RADAR_FRESH then return cls end
     return nil
 end
@@ -1318,12 +1382,33 @@ end
 local function CheckNear()
     if not db.warnNear or unlocked then return end
     if HasPutrid("player") or ImmuneAt(GetTime()) then return end
+    RefreshNameplateUnits()
     local now = GetTime()
-    for _, unit in ipairs(GroupUnits()) do
-        if UnitExists(unit) and not UnitIsDeadOrGhost(unit) and HasPutrid(unit)
-           and CheckInteractDistance(unit, db.wideRange and NEAR_INDEX or DANGER_INDEX) then
+    local seen = {}
+    local range = db.wideRange and NEAR_INDEX or DANGER_INDEX
+    local function CheckUnit(unit)
+        if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsDeadOrGhost(unit)
+           and HasPutrid(unit) and CheckInteractDistance(unit, range) then
             local name = UnitName(unit) or unit
-            if not nearCD[name] or now - nearCD[name] >= NEAR_COOLDOWN then
+            if not seen[name] then
+                seen[name] = true
+                if not nearCD[name] or now - nearCD[name] >= NEAR_COOLDOWN then
+                    nearCD[name] = now
+                    ShowMsg("contagion", Txt("near", { name = name }))
+                end
+            end
+        end
+    end
+    for _, unit in ipairs(GroupUnits()) do CheckUnit(unit) end
+    for unit in pairs(nameplateUnits) do CheckUnit(unit) end
+
+    -- El combat log puede revelar Putrefacto en otros jugadores sin darnos un
+    -- unitId. Solo usar esa señal si el usuario habilitó avisos sin distancia.
+    if db.warnUnknown then
+        for name, p in pairs(people) do
+            if p.putrid and p.src == "log" and now - (p.seen or 0) <= RADAR_FRESH
+               and not seen[name] and DistanceClass(name, p) == "unknown"
+               and (not nearCD[name] or now - nearCD[name] >= NEAR_COOLDOWN) then
                 nearCD[name] = now
                 ShowMsg("contagion", Txt("near", { name = name }))
             end
@@ -1355,6 +1440,7 @@ mm:SetSize(31, 31)
 mm:SetFrameStrata("MEDIUM")
 mm:SetFrameLevel(8)
 mm:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+if mm.SetPropagateMouseClicks then mm:SetPropagateMouseClicks(false) end
 mm:RegisterForDrag("LeftButton")
 mm:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
@@ -1669,6 +1755,7 @@ local function BuildOptions()
     Check(general, "showMinimap", "Mostrar botón en el minimapa", -92, ApplyMinimap)
     Header(general, "Interfaz", -134)
     Button(general, "Editar interfaz", 20, -160, 160, function() OpenEditor() end)
+    Button(general, "Restablecer posición", 200, -160, 170, ResetPositions)
     Note(general, "Mové el mensaje, la barra y el radar; cambiá tamaños, textos, colores, duración y sonido de cada aviso.", -190)
     Header(general, "Pruebas", -214)
     Button(general, "Probar aviso", 20, -240, 140, function() Trigger(15, true) end)
@@ -1708,21 +1795,14 @@ local function BuildOptions()
     Check(cont, "warnAway", "Avisarme quién está cerca antes de vomitar", -250)
     Check(cont, "wideRange", "Radio amplio (~28 yd); apagado: ~10 yd", -276)
     Check(cont, "warnUnknown", "Avisar si no se puede medir la distancia", -302)
-    Note(cont, "Fuera de tu grupo solo se mide la distancia a quien tengas de objetivo, foco o bajo el cursor, " ..
-        "o a usuarios del addon que te lleguen por /decir (ver pestaña Sincronía).", -334)
-
-    -- Apariencia
-    local look = NewPage()
-    NewTab("Apariencia", 4)
-    Header(look, "Interfaz", -14)
-    Note(look, "El editor permite mover el mensaje, la barra y el radar, cambiar su tamaño, el texto de cada aviso, " ..
-        "su color, duración y sonido, y mostrar u ocultar la barra y el radar (el radar viene oculto por defecto).", -40)
-    Button(look, "Editar interfaz", 20, -100, 170, function() OpenEditor() end)
-    Button(look, "Restablecer posición", 200, -100, 170, ResetPositions)
+    Check(cont, "silentNameplates", "Detectar sin mostrar barras amistosas (el addon las oculta)", -334,
+        function() SetSilentNameplateMode(db.silentNameplates) end)
+    Note(cont, "El cliente solo expone unidades ajenas mediante grupo, objetivo, foco, cursor o nameplates. " ..
+        "Este modo activa las placas amistosas para obtener sus unidades y las vuelve invisibles.", -366)
 
     -- Sincronía
     local sync = NewPage()
-    NewTab("Sincronía", 5)
+    NewTab("Sincronía", 4)
     Header(sync, "Sincronización con otros usuarios", -14)
     Note(sync, "Los jugadores que tengan este addon comparten su estado (Putrefacto, comió, va a vomitar, " ..
         "inmune) por tu grupo o banda, así cada uno sabe cuándo alejarse.", -40)
@@ -1865,9 +1945,24 @@ local function PickColor()
     ColorPickerFrame:Show()
 end
 
+local function CloseGameMenu()
+    if not GameMenuFrame or not GameMenuFrame:IsShown() then return end
+    if HideUIPanel then HideUIPanel(GameMenuFrame) end
+    if GameMenuFrame:IsShown() then GameMenuFrame:Hide() end
+end
+
 local function BuildEditor()
     local ed = CreateFrame("Frame", "TuWoWQoLEditor", UIParent)
     E.frame = ed
+    if GameMenuFrame and not E.gameMenuHooked then
+        GameMenuFrame:HookScript("OnShow", function()
+            if E.frame and E.frame:IsShown() then CloseGameMenu() end
+        end)
+        E.gameMenuHooked = true
+    end
+    ed:SetScript("OnUpdate", function()
+        CloseGameMenu()
+    end)
     ed:SetSize(420, 540)
     ed:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 40)
     ed:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -1982,6 +2077,7 @@ OpenEditor = function()
         return
     end
     snapshot = nil -- lo hecho en el editor se guarda al instante
+    CloseGameMenu()
     if InterfaceOptionsFrame:IsShown() then InterfaceOptionsFrame:Hide() end
     E.frame:Show()
 end
@@ -2025,7 +2121,12 @@ local function OpenConfig()
 end
 
 mm:SetScript("OnClick", function(self, button)
-    if button == "RightButton" then OpenEditor() else OpenConfig() end
+    if button == "RightButton" then
+        if GameMenuFrame and GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
+        OpenEditor()
+    else
+        OpenConfig()
+    end
 end)
 
 SLASH_TUWOWQOL1 = "/twqol"
@@ -2147,6 +2248,7 @@ end
 
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
+f:RegisterEvent("PLAYER_LOGOUT")
 f:RegisterEvent("UNIT_AURA")
 f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
@@ -2164,6 +2266,11 @@ f:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
 f:RegisterEvent("CHAT_MSG_RAID_BOSS_EMOTE")
 f:RegisterEvent("UI_INFO_MESSAGE")
 f:RegisterEvent("UI_ERROR_MESSAGE")
+-- Awesome WotLK expone tokens de unidad para placas visibles en el cliente TuWoW.
+if C_NamePlate and C_NamePlate.GetNamePlates then
+    pcall(f.RegisterEvent, f, "NAME_PLATE_UNIT_ADDED")
+    pcall(f.RegisterEvent, f, "NAME_PLATE_UNIT_REMOVED")
+end
 f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON then return end
@@ -2179,6 +2286,7 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6,
         end
         CopyDefaults(DEFAULTS, TuWoWQoLDB)
         db = TuWoWQoLDB
+        SetSilentNameplateMode(db.silentNameplates)
         BuildOptions()
         InterfaceOptions_AddCategory(panel)
         InterfaceOptionsFrame:HookScript("OnShow", function() Snapshot() end)
@@ -2192,12 +2300,36 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6,
 
     elseif event == "PLAYER_ENTERING_WORLD" then
         if not db then return end
+        if db.silentNameplates then SetSilentNameplateMode(true) end
         hadDebuff = HasPutrid("player")
         wasEating = IsEating()
         lastImm = GetImmunityExpiry()
         selfVomited = SelfVomitAura()
         initialized = true
+        for unit in pairs(nameplateUnits) do HandleUnitAura(unit) end
         helloAt = GetTime() + 4
+
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        if type(arg1) == "string" then
+            nameplateUnits[arg1] = true
+            HideFriendlyNameplate(arg1)
+            if debugOn then
+                local name = UnitName(arg1)
+                if name then Say("nameplate detectado: " .. name .. (UnitIsPlayer(arg1) and " (jugador)" or " (no jugador)")) end
+            end
+            if db and initialized then HandleUnitAura(arg1) end
+        end
+
+    elseif event == "NAME_PLATE_UNIT_REMOVED" then
+        local saved = hiddenNameplateFrames[arg1]
+        if saved and saved.frame and saved.frame.SetAlpha then
+            saved.frame:SetAlpha(saved.alpha or 1)
+            hiddenNameplateFrames[arg1] = nil
+        end
+        if arg1 then nameplateUnits[arg1] = nil end
+
+    elseif event == "PLAYER_LOGOUT" then
+        if db and db.silentNameplates then RestoreSilentNameplates(true) end
 
     elseif not db or not initialized then
         return
@@ -2208,7 +2340,8 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6,
         elseif arg1 and (string.find(arg1, "^party%d$") or string.find(arg1, "^raid%d+$")) then
             HandleGroupAura(arg1)
             HandleUnitAura(arg1)
-        elseif arg1 == "target" or arg1 == "focus" then
+        elseif arg1 == "target" or arg1 == "focus"
+           or (arg1 and string.find(arg1, "^nameplate%d+$")) then
             HandleUnitAura(arg1)
         end
 
