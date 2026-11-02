@@ -496,6 +496,7 @@ end
 ---------------------------------------------------------------------
 local PREFIX = "TWQ"
 local VERSION = (GetAddOnMetadata and GetAddOnMetadata(ADDON, "Version")) or "?"
+local UPDATE_NOTICE = { version = nil }
 local PLAYER_FLAG = COMBATLOG_OBJECT_TYPE_PLAYER or 0x400
 local EXTRA_UNITS = { "target", "focus", "mouseover" }
 local DANGER_INDEX, NEAR_INDEX = 3, 4 -- CheckInteractDistance: 3 = ~10 yd, 4 = ~28 yd
@@ -775,7 +776,9 @@ local function ImmSecs(expires)
 end
 
 local function Send(msg)
-    if not db or not db.syncEnabled then return end
+    if not db then return end
+    local isVersionHello = string.sub(msg or "", 1, 2) == "H:"
+    if not db.syncEnabled and not isVersionHello then return end
     local ch
     local _, itype = IsInInstance()
     if itype == "pvp" then
@@ -786,6 +789,9 @@ local function Send(msg)
         ch = "PARTY"
     end
     if ch then pcall(SendAddonMessage, PREFIX, msg, ch) end
+    if isVersionHello and IsInGuild and IsInGuild() then
+        pcall(SendAddonMessage, PREFIX, msg, "GUILD")
+    end
     if db.syncNearby then pcall(SendAddonMessage, PREFIX, msg, "SAY") end
 end
 
@@ -802,6 +808,17 @@ local function SendHello()
     lastHello = now
     Send("H:" .. tostring(VERSION))
     if hadDebuff or endTime then SendState() end
+end
+
+local function IsVersionNewer(candidate, installed)
+    local cMajor, cMinor, cPatch = string.match(tostring(candidate or ""), "^v?(%d+)%.(%d+)%.?(%d*)$")
+    local iMajor, iMinor, iPatch = string.match(tostring(installed or ""), "^v?(%d+)%.(%d+)%.?(%d*)$")
+    if not cMajor or not iMajor then return false end
+    cMajor, cMinor, cPatch = tonumber(cMajor), tonumber(cMinor), tonumber(cPatch) or 0
+    iMajor, iMinor, iPatch = tonumber(iMajor), tonumber(iMinor), tonumber(iPatch) or 0
+    if cMajor ~= iMajor then return cMajor > iMajor end
+    if cMinor ~= iMinor then return cMinor > iMinor end
+    return cPatch > iPatch
 end
 
 local function Num(str)
@@ -821,7 +838,7 @@ local function MaybeAck(sender, p, rem)
 end
 
 local function OnAddonMessage(prefix, msg, channel, sender)
-    if prefix ~= PREFIX or not db or not db.syncEnabled or not msg or not sender then return end
+    if prefix ~= PREFIX or not db or not msg or not sender then return end
     if sender == UnitName("player") then return end
     local now = GetTime()
     local au = addonUsers[sender]
@@ -831,9 +848,16 @@ local function OnAddonMessage(prefix, msg, channel, sender)
 
     local cmd, rest = string.match(msg, "^(%a):?(.*)$")
     if not cmd then return end
+    if not db.syncEnabled and cmd ~= "H" then return end
 
     if cmd == "H" then
         au.ver = string.match(rest, "^([^:]*)")
+        if IsVersionNewer(au.ver, VERSION)
+           and (not UPDATE_NOTICE.version or IsVersionNewer(au.ver, UPDATE_NOTICE.version)) then
+            UPDATE_NOTICE.version = au.ver
+            Say(sender .. " usa TuWoW QoL v" .. au.ver .. "; tu versión es v" .. VERSION
+                .. ". Revisá https://github.com/notranco/TuWoWQoL")
+        end
         if isNew and not helloAt then helloAt = now + 1 + math.random() end
         return
     elseif cmd == "A" then
@@ -1071,11 +1095,12 @@ local function RosterTick(now)
 end
 
 local function SyncTick(now)
-    if not db.syncEnabled then return end
+    if not db then return end
     if helloAt and now >= helloAt then
         helloAt = nil
         SendHello()
     end
+    if not db.syncEnabled then return end
     if (hadDebuff or endTime) and now - lastHB >= 5 then
         lastHB = now
         SendState()
