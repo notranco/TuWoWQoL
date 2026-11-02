@@ -10,6 +10,7 @@ Addon experimental de calidad de vida para **TuWoW en World of Warcraft 3.3.5a**
 - Sincronización de estado con usuarios del addon por grupo/banda y, opcionalmente, por `/decir`.
 - Radar opcional, botón de minimapa y editor de interfaz para mover y ajustar los elementos.
 - Opciones con desplazamiento vertical para acceder a todos los ajustes.
+- Hotspot de luna/sol con tooltip de fase y cuenta regresiva día/noche de TuWoW, centrado sobre el icono nativo de ciclo de ForeverUI; si no existe, muestra su propio icono en una posición visible. El botón de TuWoWQoL queda reservado para abrir la configuración. Usa un ciclo de 2 horas y el horario 06:00–20:00 del juego. El addon avisa cinco minutos antes de la noche; al comenzar, muestra la información de Rabiar, loot x2 y +10% de experiencia que anuncia el servidor.
 
 La detección depende de los hechizos, eventos y unidades que exponga el servidor. Puede ser incompleta; las funciones experimentales requieren pruebas en TuWoW.
 
@@ -32,6 +33,6 @@ La detección depende de los hechizos, eventos y unidades que exponga el servido
 
 ## Estado
 
-Versión del addon: **0.5.2**. Esta versión incluye mejoras experimentales de detección mediante nameplates y ajustes de la interfaz. Verifica las detecciones dentro del servidor antes de depender de sus alertas.
+Versión del addon: **0.5.14**. Incluye tooltips con filas alineadas, separadores y colores, muestra la versión junto al nombre en el botón de minimapa y centra el hotspot del ciclo sobre el icono nativo de ForeverUI. Verifica las detecciones dentro del servidor antes de depender de sus alertas.
 
 El código se distribuye bajo la licencia [MIT](LICENSE).

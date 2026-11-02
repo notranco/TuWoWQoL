@@ -42,6 +42,8 @@ local MSG = {
                   prio = 3, size = 30, anim = "pop", pulse = true },
     theirVomit = { color = { 1.00, 0.10, 0.10 }, icon = ICON_SKULL, dur = 3, sound = "igQuestFailed",
                   prio = 3, size = 32, anim = "pop", shake = true },
+    night      = { color = { 1.00, 0.48, 0.12 }, icon = ICON_SKULL, dur = 6, sound = "RaidWarning",
+                  prio = 2, size = 28, anim = "pop" },
     away      = { color = { 1.00, 0.30, 0.30 }, icon = ICON_DEBUFF, dur = 3, sound = "AlarmClockWarning3",
                   prio = 3, size = 26, anim = "pop", pulse = true },
 }
@@ -68,6 +70,10 @@ local DEFAULTS = {
     wideRange = false,    -- true: ~28 yd, false: ~10 yd (radio de contagio por defecto)
     warnUnknown = false,  -- avisar aunque no se pueda medir la distancia
     silentNameplates = false, -- activar nameplates amistosos y ocultar las placas de jugadores
+    warnNight = true,
+    dayNightCycleMinutes = 120, -- duración real de un ciclo completo de 24 horas del juego
+    dayNightSunrise = 360, -- 06:00 hora del juego
+    dayNightSunset = 1200, -- 20:00 hora del juego
     alertSeconds = 10,    -- avisar cuando falten estos segundos
     syncEnabled = true,   -- compartir/recibir estado por grupo o banda
     syncNearby = false,   -- tambien por /decir a jugadores cercanos (experimental)
@@ -94,6 +100,12 @@ local initialized = false
 
 -- Segundos exactos entre comer estando Putrefacto y vomitar (confirmado en el servidor)
 local EAT_DELAY = 60
+local DAY_NIGHT = {
+    gameMinutes = nil, lastSample = 0,
+    observedPhase = nil, observedAt = nil,
+    isDay = nil, warningSent = false,
+    elapsed = 0, tooltipElapsed = 0, buttonCheckElapsed = 0,
+}
 -- Jugadores con distancia desconocida se muestran en el radar solo si hubo señales recientes
 local RADAR_FRESH = 8
 
@@ -108,6 +120,7 @@ local TEXTS = {
     eat = "{name} comió: vomita en {est}{s}s",
     imminent = "¡{name} vomita en {s}s! ¡Alejate!",
     theirVomit = "¡{name} está vomitando! ¡Alejate!",
+    nightSoon = "La noche empieza en {m} min; los bichos pueden tener Rabiar.",
     vomitedOn = "¡{name} vomitó cerca tuyo!",
     away = "¡Alejate! Vomitás en {s}s y hay gente cerca: {list}",
     radarTitle = "Contagio",
@@ -1376,6 +1389,120 @@ local function UpdateBar(now, elapsed)
     barFrame:SetAlpha(barAlpha)
 end
 
+DAY_NIGHT.CycleTimeText = function(totalSec)
+    totalSec = math.max(0, math.floor(totalSec + 0.5))
+    local hours = math.floor(totalSec / 3600)
+    local minutes = math.floor((totalSec % 3600) / 60)
+    local seconds = totalSec % 60
+    if hours > 0 then return string.format("%dh %02dm", hours, minutes) end
+    return string.format("%02dm %02ds", minutes, seconds)
+end
+
+DAY_NIGHT.GetCycleGameMinutes = function(realNow)
+    local hours, minutes = GetGameTime()
+    if type(hours) ~= "number" or type(minutes) ~= "number" then return nil end
+    local serverMinutes = (hours * 60 + minutes) % 1440
+    local cycleLength = tonumber(db.dayNightCycleMinutes) or 120
+    if cycleLength < 1 then cycleLength = 120 end
+    local secondsPerGameMinute = cycleLength * 60 / 1440
+
+    if not DAY_NIGHT.gameMinutes or DAY_NIGHT.lastSample == 0
+       or math.abs(DAY_NIGHT.gameMinutes - serverMinutes) > 2 then
+        DAY_NIGHT.gameMinutes = serverMinutes
+    else
+        DAY_NIGHT.gameMinutes = (DAY_NIGHT.gameMinutes + math.max(0, realNow - DAY_NIGHT.lastSample) / secondsPerGameMinute) % 1440
+    end
+    DAY_NIGHT.lastSample = realNow
+    return DAY_NIGHT.gameMinutes, secondsPerGameMinute
+end
+
+DAY_NIGHT.GetCycleInfo = function(realNow)
+    local gameMinutes, secondsPerGameMinute = DAY_NIGHT.GetCycleGameMinutes(realNow)
+    if not gameMinutes then return nil end
+
+    local sunrise = (tonumber(db.dayNightSunrise) or 360) % 1440
+    local sunset = (tonumber(db.dayNightSunset) or 1200) % 1440
+    local isDay, elapsed, phaseLength
+    if sunrise <= gameMinutes and gameMinutes < sunset then
+        isDay = true
+        elapsed = gameMinutes - sunrise
+        phaseLength = sunset - sunrise
+    else
+        isDay = false
+        elapsed = gameMinutes >= sunset and (gameMinutes - sunset) or (gameMinutes + 1440 - sunset)
+        phaseLength = 1440 - sunset + sunrise
+    end
+
+    if DAY_NIGHT.observedPhase and DAY_NIGHT.observedAt then
+        local observedIsDay = DAY_NIGHT.observedPhase == "day"
+        local observedElapsed = math.max(0, realNow - DAY_NIGHT.observedAt)
+        local observedLength = (observedIsDay and (sunset - sunrise) or (1440 - sunset + sunrise))
+            * secondsPerGameMinute
+        if observedElapsed < observedLength then
+            return observedIsDay, observedLength - observedElapsed, observedElapsed, observedLength, "server"
+        else
+            DAY_NIGHT.observedPhase, DAY_NIGHT.observedAt = nil, nil
+        end
+    end
+
+    local remainingSeconds = math.max(0, (phaseLength - elapsed) * secondsPerGameMinute)
+    return isDay, remainingSeconds, elapsed * secondsPerGameMinute, phaseLength * secondsPerGameMinute, "clock"
+end
+
+DAY_NIGHT.Update = function(realNow)
+    if not db then return end
+    local isDay, remainingSeconds = DAY_NIGHT.GetCycleInfo(realNow)
+    if isDay == nil then return end
+    if DAY_NIGHT.iconTexture then
+        DAY_NIGHT.iconTexture:SetTexture(isDay and "Interface\\Icons\\Spell_Holy_SearingLight"
+            or "Interface\\Icons\\INV_Misc_Moon_01")
+    end
+
+    if DAY_NIGHT.isDay ~= nil and DAY_NIGHT.isDay ~= isDay then
+        if isDay then
+            DAY_NIGHT.warningSent = false
+        end
+    end
+    DAY_NIGHT.isDay = isDay
+
+    if isDay and db.warnNight and not DAY_NIGHT.warningSent and remainingSeconds <= 300 then
+        DAY_NIGHT.warningSent = true
+        ShowMsg("night", Txt("nightSoon", { m = math.max(1, math.ceil(remainingSeconds / 60)) }))
+    end
+end
+
+DAY_NIGHT.HandleMessage = function(message)
+    if type(message) ~= "string" then return end
+    local lower = string.lower(message)
+    lower = string.gsub(lower, "í", "i")
+    lower = string.gsub(lower, "Í", "i")
+    local isNight = string.find(lower, "ha llegado la noche", 1, true)
+        or string.find(lower, "llego la noche", 1, true)
+        or string.find(lower, "empieza la noche", 1, true)
+        or (string.find(lower, "noche", 1, true) and string.find(lower, "rabiar", 1, true)
+            and string.find(lower, "loot", 1, true))
+    local isDay = string.find(lower, "amanec", 1, true)
+        or string.find(lower, "llego el dia", 1, true)
+        or string.find(lower, "ha llegado el dia", 1, true)
+        or string.find(lower, "empieza el dia", 1, true)
+        or string.find(lower, "comienza el dia", 1, true)
+        or string.find(lower, "dia ha llegado", 1, true)
+        or (string.find(lower, "dia", 1, true) and string.find(lower, "dejan de rabiar", 1, true))
+    if not isNight and not isDay then return end
+
+    local now = GetTime()
+    local phase = isNight and "night" or "day"
+    DAY_NIGHT.observedPhase, DAY_NIGHT.observedAt = phase, now
+    DAY_NIGHT.lastSample = 0 -- alinea también el cálculo del reloj al anuncio del servidor
+    if isNight then
+        DAY_NIGHT.gameMinutes = tonumber(db.dayNightSunset) or 1200
+    else
+        DAY_NIGHT.gameMinutes = tonumber(db.dayNightSunrise) or 360
+        DAY_NIGHT.warningSent = false
+    end
+    DAY_NIGHT.isDay = isDay and true or false
+end
+
 ---------------------------------------------------------------------
 -- Contagio
 ---------------------------------------------------------------------
@@ -1450,13 +1577,39 @@ mmIcon:SetPoint("CENTER", 0, 1)
 mmIcon:SetTexture(MINIMAP_ICON)
 mmIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
+-- Botón independiente para el ciclo: su tooltip no comparte el botón de configuración.
+DAY_NIGHT.iconButton = CreateFrame("Button", "TuWoWQoLCycleButton", Minimap)
+DAY_NIGHT.iconButton:SetSize(42, 42)
+DAY_NIGHT.iconButton:SetFrameStrata("MEDIUM")
+DAY_NIGHT.iconButton:SetFrameLevel(10)
+DAY_NIGHT.iconTexture = DAY_NIGHT.iconButton:CreateTexture(nil, "BACKGROUND")
+DAY_NIGHT.iconTexture:SetSize(33, 33)
+DAY_NIGHT.iconTexture:SetPoint("CENTER")
+DAY_NIGHT.iconTexture:SetTexture("Interface\\Icons\\INV_Misc_Moon_01")
+
 local mmBorder = mm:CreateTexture(nil, "OVERLAY")
 mmBorder:SetSize(53, 53)
 mmBorder:SetPoint("TOPLEFT")
 mmBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
 
+DAY_NIGHT.PlaceButton = function()
+    local cycleButton = DAY_NIGHT.iconButton
+    if not cycleButton then return end
+    local reference = _G.ForeverUIMinimapDiel or DAY_NIGHT.button or _G.DayNightBarMinimapButton
+    cycleButton:ClearAllPoints()
+    if reference and reference.IsShown and reference:IsShown() then
+        cycleButton:SetPoint("CENTER", reference, "CENTER", 0, 0)
+        DAY_NIGHT.iconTexture:SetAlpha(0)
+    else
+        local angle = math.rad(45)
+        cycleButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * 80, math.sin(angle) * 80)
+        DAY_NIGHT.iconTexture:SetAlpha(1)
+    end
+end
+
 local function PlaceMinimapButton()
-    local angle = math.rad(db.minimapAngle or 215)
+    local angleDegrees = db.minimapAngle or 215
+    local angle = math.rad(angleDegrees)
     mm:ClearAllPoints()
     mm:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * 80, math.sin(angle) * 80)
 end
@@ -1464,9 +1617,12 @@ end
 local function ApplyMinimap()
     if db.showMinimap then
         PlaceMinimapButton()
+        DAY_NIGHT.PlaceButton()
         mm:Show()
+        DAY_NIGHT.iconButton:Show()
     else
         mm:Hide()
+        DAY_NIGHT.iconButton:Hide()
     end
 end
 
@@ -1481,15 +1637,83 @@ end
 
 mm:SetScript("OnDragStart", function(self) self:SetScript("OnUpdate", MinimapDragUpdate) end)
 mm:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+DAY_NIGHT.RefreshTooltip = function(force)
+    if not GameTooltip then return end
+    if force then
+        if GameTooltip.SetOwner then GameTooltip:SetOwner(force, "ANCHOR_LEFT") end
+    elseif not GameTooltip:IsShown()
+       or not (GameTooltip:IsOwned(DAY_NIGHT.iconButton)
+           or (DAY_NIGHT.button and GameTooltip:IsOwned(DAY_NIGHT.button))) then
+        return
+    end
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine("Ciclo del día", 1, 0.82, 0.2)
+    local isDay, remainingSeconds, elapsedSeconds, phaseSeconds, source = DAY_NIGHT.GetCycleInfo(GetTime())
+    if isDay == nil then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddDoubleLine("Estado", "No disponible", 0.1, 0.8, 1, 0.75, 0.75, 0.75)
+    else
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddDoubleLine("Fase", isDay and "Día" or "Noche",
+            0.1, 0.8, 1, isDay and 0.85 or 0.75, isDay and 0.95 or 0.8, 1)
+        GameTooltip:AddDoubleLine("Próxima fase",
+            (isDay and "Noche en: " or "Día en: ") .. DAY_NIGHT.CycleTimeText(remainingSeconds),
+            0.1, 0.8, 1, 1, 0.85, 0.25)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(isDay and "Estado nocturno" or "Efectos nocturnos", 1, 0.82, 0.2)
+        GameTooltip:AddDoubleLine("Rabiar", isDay and "Inactivo" or "Activo",
+            0.1, 0.8, 1, isDay and 0.75 or 1, isDay and 0.75 or 0.3, isDay and 0.75 or 0.2)
+        if not isDay then
+            GameTooltip:AddDoubleLine("Loot del mundo", "x2.0", 0.1, 0.8, 1, 1, 0.85, 0.25)
+            GameTooltip:AddDoubleLine("Experiencia", "+10%", 0.1, 0.8, 1, 1, 0.85, 0.25)
+        end
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddDoubleLine("Fuente", source == "server" and "Anuncio del servidor" or "Reloj del juego",
+            0.1, 0.8, 1, 0.7, 0.7, 0.7)
+    end
+    GameTooltip:Show()
+end
+
+DAY_NIGHT.HookButton = function()
+    local nativeCycle = _G.ForeverUIMinimapDiel
+    if nativeCycle and DAY_NIGHT.reference ~= nativeCycle then
+        DAY_NIGHT.reference = nativeCycle
+        if nativeCycle.HookScript then
+            nativeCycle:HookScript("OnShow", DAY_NIGHT.PlaceButton)
+            nativeCycle:HookScript("OnHide", DAY_NIGHT.PlaceButton)
+        end
+        DAY_NIGHT.PlaceButton()
+    end
+
+    if DAY_NIGHT.button then return end
+    local button = _G.DayNightBarMinimapButton
+    if not button or not button.HookScript then return end
+    DAY_NIGHT.button = button
+    button:HookScript("OnEnter", function(self) DAY_NIGHT.RefreshTooltip(self) end)
+    button:HookScript("OnDragStop", DAY_NIGHT.PlaceButton)
+    button:HookScript("OnShow", DAY_NIGHT.PlaceButton)
+    button:HookScript("OnHide", DAY_NIGHT.PlaceButton)
+    DAY_NIGHT.PlaceButton()
+end
+
 mm:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-    GameTooltip:AddLine("TuWoW QoL")
-    GameTooltip:AddLine("Click: abrir configuración", 1, 1, 1)
-    GameTooltip:AddLine("Click derecho: editar interfaz", 1, 1, 1)
-    GameTooltip:AddLine("Arrastrar: mover el botón", 0.7, 0.7, 0.7)
+    GameTooltip:ClearLines()
+    GameTooltip:AddDoubleLine("TuWoW QoL", "v" .. VERSION,
+        1, 0.82, 0.2, 0.65, 0.65, 0.65)
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddDoubleLine("Clic izq.", "Opciones", 0.1, 0.8, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Clic der.", "Editar interfaz", 0.1, 0.8, 1, 1, 1, 1)
     GameTooltip:Show()
 end)
 mm:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+DAY_NIGHT.iconButton:SetScript("OnEnter", function(self)
+    DAY_NIGHT.RefreshTooltip(self)
+end)
+DAY_NIGHT.iconButton:SetScript("OnLeave", function(self)
+    if GameTooltip and GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+end)
 
 ---------------------------------------------------------------------
 -- Configuracion (Interfaz > AddOns)
@@ -1775,10 +1999,11 @@ local function BuildOptions()
     Header(warns, "Estado", -162)
     Check(warns, "warnApplied", "Avisar al recibir el debuff", -188)
     Check(warns, "eatFallback", "Respaldo: detectar comida y pociones por buffs", -224)
+    Check(warns, "warnNight", "Avisar 5 minutos antes de la noche", -250)
     Note(warns, "La cuenta (60 s exactos) empieza cuando el servidor avisa que tu estómago putrefacto rechaza lo consumido. " ..
         "El respaldo solo sirve si ese mensaje no te llega. " ..
         "Si perdés el debuff durante la cuenta, se cancela. " ..
-        "Con Estómago de hierro solo se avisa si la inmunidad se va a acabar antes de que vomites.", -262)
+        "Con Estómago de hierro solo se avisa si la inmunidad se va a acabar antes de que vomites.", -288)
 
     -- Contagio
     local cont = NewPage()
@@ -1843,6 +2068,7 @@ local EDIT_ITEMS = {
       hint = "{name} = jugador", vars = { name = "Jugador" } },
     { key = "away", kind = "away", label = "Alejate (vos vas a vomitar)",
       hint = "{s} = segundos, {list} = jugadores cerca", vars = { s = 8, list = "Jugador1, Jugador2" } },
+    { key = "nightSoon", kind = "night", label = "Aviso antes de la noche", hint = "{m} = minutos", vars = { m = 5 } },
     { key = "radarTitle", label = "Radar: título" },
     { key = "radarMe", label = "Radar: tu nombre" },
     { key = "stMyVomit", label = "Radar: vos vomitás en", hint = "{s} = segundos" },
@@ -2164,9 +2390,28 @@ local radarElapsed = 0
 f:SetScript("OnUpdate", function(self, elapsed)
     if not db then return end
     local now = GetTime()
+    if not DAY_NIGHT.reference then
+        DAY_NIGHT.buttonCheckElapsed = DAY_NIGHT.buttonCheckElapsed + elapsed
+        if DAY_NIGHT.buttonCheckElapsed >= 1 then
+            DAY_NIGHT.buttonCheckElapsed = 0
+            DAY_NIGHT.HookButton()
+        end
+    end
     UpdateCountdown(now)
     UpdateBanner(now)
     UpdateBar(now, elapsed)
+
+    DAY_NIGHT.elapsed = DAY_NIGHT.elapsed + elapsed
+    if DAY_NIGHT.elapsed >= 1 then
+        DAY_NIGHT.elapsed = 0
+        DAY_NIGHT.Update(now)
+    end
+
+    DAY_NIGHT.tooltipElapsed = DAY_NIGHT.tooltipElapsed + elapsed
+    if DAY_NIGHT.tooltipElapsed >= 0.5 then
+        DAY_NIGHT.tooltipElapsed = 0
+        DAY_NIGHT.RefreshTooltip()
+    end
 
     radarElapsed = radarElapsed + elapsed
     if radarElapsed >= 0.4 then
@@ -2275,6 +2520,8 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6,
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON then return end
         TuWoWQoLDB = TuWoWQoLDB or {}
+        TuWoWQoLDB.showDayNight = nil
+        TuWoWQoLDB.dayNightPos = nil
         -- Migracion a la v0.5: el radar viene oculto y el vomito tarda 60 s exactos
         if next(TuWoWQoLDB) ~= nil then
             local v = TuWoWQoLDB.cfgVersion or 0
@@ -2354,6 +2601,7 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, arg6,
 
     elseif string.sub(event, 1, 8) == "CHAT_MSG" or string.sub(event, 1, 10) == "UI_INFO_ME"
            or string.sub(event, 1, 10) == "UI_ERROR_M" then
+        if event == "CHAT_MSG_SYSTEM" or event == "UI_INFO_MESSAGE" then DAY_NIGHT.HandleMessage(arg1) end
         OnEatMessage(arg1, arg2, event)
 
     elseif event == "PLAYER_TARGET_CHANGED" then
