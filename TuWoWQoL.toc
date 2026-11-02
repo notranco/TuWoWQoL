@@ -2,6 +2,25 @@
 ## Title: TuWoW QoL
 ## Notes: Avisos de Putrefacto, tooltip del ciclo dia/noche de 2 horas y Rabiar nocturno, contagio, radar y sincronizacion. Configuracion en Interfaz > AddOns.
 ## Author: Romero
-## Version: 0.5.16
+## Version: 0.6.0
 ## SavedVariables: TuWoWQoLDB
-TuWoWQoL.lua
+
+Modules\DayNight.lua
+
+Core\Constants.lua
+UI\Banner.lua
+UI\Bar.lua
+UI\Messages.lua
+Detection\Auras.lua
+Detection\People.lua
+Sync\Sync.lua
+Detection\CombatLog.lua
+Logic\Maintenance.lua
+Core\Utilities.lua
+UI\Radar.lua
+Logic\Countdown.lua
+Detection\Contagion.lua
+UI\Minimap.lua
+UI\Options.lua
+UI\Editor.lua
+Core\Events.lua

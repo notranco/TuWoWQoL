@@ -9,8 +9,9 @@ Addon experimental de calidad de vida para **TuWoW en World of Warcraft 3.3.5a**
 - Opción experimental para activar las nameplates amistosas y ocultarlas visualmente mientras se detectan unidades.
 - Sincronización de estado con usuarios del addon por grupo/banda y, opcionalmente, por `/decir`.
 - Radar opcional, botón de minimapa y editor de interfaz para mover y ajustar los elementos.
-- Opciones con desplazamiento vertical para acceder a todos los ajustes.
-- Hotspot de luna/sol con tooltip de fase y cuenta regresiva día/noche de TuWoW, centrado sobre el icono nativo de ciclo de ForeverUI; si no existe, muestra su propio icono en una posición visible. El botón de TuWoWQoL queda reservado para abrir la configuración. Usa un ciclo de 2 horas y el horario 06:00–20:00 del juego. El addon avisa cinco minutos antes de la noche; al comenzar, muestra la información de Rabiar, loot x2 y +10% de experiencia que anuncia el servidor.
+- Reconocimiento del mensaje de náuseas al vomitar para cerrar la cuenta regresiva existente sin duplicar alertas.
+- Opciones con el scroll nativo de WoW (barra, flechas y rueda del mouse).
+- Hotspot de luna/sol con tooltip de fase y cuenta regresiva día/noche de TuWoW, centrado sobre el icono nativo de ciclo de ForeverUI; si no existe, muestra su propio icono en una posición visible. El botón de TuWoWQoL queda reservado para abrir la configuración. El ciclo completo dura 2 horas. El addon toma como referencia el anuncio del servidor (día o noche), lo guarda con la hora real —así sobrevive a relogueos— y calcula la fase desde ahí; aprende la duración real del día y de la noche al ver dos anuncios seguidos (mientras tanto estima 06:00–20:00 dentro del ciclo de 2 h). Avisa cinco minutos antes de la noche; al comenzar, muestra la información de Rabiar, loot x2 y +10% de experiencia que anuncia el servidor.
 - Aviso de actualización por comunicación entre addons: compara la versión de TuWoWQoL con la que anuncian otros jugadores del grupo, banda o hermandad y avisa si detecta una superior. Envía el saludo de versión aunque la sincronización de estados esté desactivada.
 
 La detección depende de los hechizos, eventos y unidades que exponga el servidor. Puede ser incompleta; las funciones experimentales requieren pruebas en TuWoW.
@@ -34,6 +35,23 @@ La detección depende de los hechizos, eventos y unidades que exponga el servido
 
 ## Estado
 
-Versión del addon: **0.5.16**. Incluye verificación de versiones entre jugadores del grupo/banda/hermandad y aviso con el enlace del proyecto cuando detecta un cliente más nuevo, además de las mejoras del ciclo día/noche y los tooltips. Verifica las detecciones dentro del servidor antes de depender de sus alertas.
+Versión del addon: **0.6.0**. Incluye reconocimiento del mensaje de vómito y verificación de versiones entre jugadores del grupo/banda/hermandad.
+
+## Estructura
+
+Todos los archivos comparten una tabla de espacio de nombres (`local _, NS = ...`); el orden de carga está en `TuWoWQoL.toc`.
+
+- `Modules/DayNight.lua`: ciclo día/noche, botón del minimapa y tooltip.
+- `Core/Constants.lua`: constantes, estilos de mensaje, textos, valores por defecto y estado compartido.
+- `Core/Utilities.lua`: pruebas, estado y ayuda de los comandos.
+- `Core/Events.lua`: eventos, bucle principal y comandos `/twqol`.
+- `UI/Banner.lua`, `UI/Bar.lua`, `UI/Messages.lua`: aviso en pantalla, barra de tiempo y mensajes.
+- `UI/Radar.lua`: radar de contagio.
+- `UI/Minimap.lua`: botón de minimapa.
+- `UI/Options.lua`: panel en Interfaz > AddOns (con el scroll nativo de WoW).
+- `UI/Editor.lua`: editor de interfaz.
+- `Detection/Auras.lua`, `Detection/People.lua`, `Detection/CombatLog.lua`, `Detection/Contagion.lua`: detección de Putrefacto, jugadores cercanos, combat log y contagio.
+- `Sync/Sync.lua`: sincronización entre usuarios del addon.
+- `Logic/Countdown.lua`, `Logic/Maintenance.lua`: cuenta regresiva del vómito y tareas periódicas.
 
 El código se distribuye bajo la licencia [MIT](LICENSE).
