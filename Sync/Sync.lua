@@ -64,7 +64,7 @@ end
 -- por susurro que estamos cerca, para que su aviso "alejate" nos incluya.
 local function MaybeAck(sender, p, rem)
     if not rem or rem > 15 or p.chan ~= "SAY" then return end
-    if NS.FindUnit(sender) or not NS.IAmSafe() then return end
+    if NS.FindUnit(sender) or not NS.CanBeInfected() then return end
     local now = GetTime()
     if NS.lastAck[sender] and now - NS.lastAck[sender] < 6 then return end
     NS.lastAck[sender] = now
@@ -73,8 +73,12 @@ end
 
 function NS.OnAddonMessage(prefix, msg, channel, sender)
     if prefix ~= NS.PREFIX or not NS.db or not msg or not sender then return end
-    if sender == UnitName("player") then return end
+    if sender == (NS.myName or UnitName("player")) then return end
     local now = GetTime()
+    -- Con "cercanos" el mismo mensaje llega por grupo/banda y por /decir: se procesa una vez
+    local key = sender .. "\1" .. msg
+    if NS.recentMsg[key] and now - NS.recentMsg[key] < 1 then return end
+    NS.recentMsg[key] = now
     local au = NS.addonUsers[sender]
     local isNew = false
     if not au then au = {}; NS.addonUsers[sender] = au; isNew = true end
@@ -90,7 +94,7 @@ function NS.OnAddonMessage(prefix, msg, channel, sender)
            and (not NS.UPDATE_NOTICE.version or IsVersionNewer(au.ver, NS.UPDATE_NOTICE.version)) then
             NS.UPDATE_NOTICE.version = au.ver
             NS.Say(sender .. " usa TuWoW QoL v" .. au.ver .. "; tu versión es v" .. NS.VERSION
-                .. ". Revisá https://github.com/notranco/TuWoWQoL")
+                .. ". Actualizalo desde el Launcher o en https://github.com/notranco/TuWoWQoL")
         end
         if isNew and not NS.helloAt then NS.helloAt = now + 1 + math.random() end
         return

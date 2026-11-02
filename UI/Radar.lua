@@ -101,7 +101,7 @@ function NS.UpdateRadar(now)
     table.sort(list, RadarSort)
 
     local n = math.min(#list, maxRows)
-    if not (NS.db.showRadar and (n > 0 or NS.unlocked)) then
+    if not (NS.db.showRadar and (n > 0 or NS.unlocked or NS.db.radarAlways)) then
         if NS.radar:IsShown() then NS.radar:Hide() end
         return
     end

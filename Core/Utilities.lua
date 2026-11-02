@@ -57,6 +57,7 @@ function NS.ShowStatus()
         condition = condition .. "; sin inmunidad detectada"
     end
     NS.Say("Estado: " .. condition .. ".")
+    NS.Say("Ciclo: " .. TuWoWQoLDayNight.Describe())
 
     local peers = {}
     for name, au in pairs(NS.addonUsers) do
@@ -77,6 +78,30 @@ function NS.ShowStatus()
     end
 end
 
+-- /twqol ciclo            -> muestra la fase actual
+-- /twqol ciclo dia|noche [minutos]  -> calibra a mano (la fase empezo hace N minutos)
+-- /twqol ciclo reset      -> olvida el ancla y las duraciones aprendidas
+function NS.CycleCommand(arg, extra)
+    local DN = TuWoWQoLDayNight
+    arg = string.lower(arg or "")
+    arg = string.gsub(arg, "í", "i")
+    if arg == "" then
+        NS.Say("Ciclo: " .. DN.Describe())
+    elseif arg == "dia" or arg == "day" then
+        DN.Calibrate("day", extra)
+        NS.Say("Ciclo calibrado: " .. DN.Describe())
+    elseif arg == "noche" or arg == "night" then
+        DN.Calibrate("night", extra)
+        NS.Say("Ciclo calibrado: " .. DN.Describe())
+    elseif arg == "reset" then
+        DN.Reset()
+        NS.Say("Ciclo reiniciado. Se vuelve a sincronizar con el próximo anuncio del servidor.")
+    else
+        NS.Say("Uso: /twqol ciclo [dia|noche [minutos transcurridos] | reset]")
+    end
+end
+
 function NS.ShowHelp()
-    NS.Say("Comandos: /twqol o /tuwowqol (opciones), status, debug, radar, lista, test, editar.")
+    NS.Say("Comandos: /twqol o /tuwowqol (opciones), status, debug, radar, lista, test, editar, " ..
+        "ciclo [dia|noche [min] | reset], ids.")
 end

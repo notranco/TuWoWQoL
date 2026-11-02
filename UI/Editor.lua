@@ -26,6 +26,9 @@ local EDIT_ITEMS = {
     { key = "away", kind = "away", label = "Alejate (vos vas a vomitar)",
       hint = "{s} = segundos, {list} = jugadores cerca", vars = { s = 8, list = "Jugador1, Jugador2" } },
     { key = "nightSoon", kind = "night", label = "Aviso antes de la noche", hint = "{m} = minutos", vars = { m = 5 } },
+    { key = "nightStart", kind = "nightStart", label = "Comienza la noche" },
+    { key = "dayStart", kind = "dayStart", label = "Comienza el día" },
+    { key = "sayAway", label = "Aviso por /decir (se dice en el chat)", hint = "{s} = segundos" },
     { key = "radarTitle", label = "Radar: título" },
     { key = "radarMe", label = "Radar: tu nombre" },
     { key = "stMyVomit", label = "Radar: vos vomitás en", hint = "{s} = segundos" },
@@ -270,20 +273,41 @@ function NS.Snapshot()
 end
 
 NS.panel.okay = function() NS.snapshot = nil end
+-- Estado que NO es una opcion del usuario: Cancelar y Restablecer no lo tocan. Sin esto se perdia
+-- el ciclo aprendido y el valor original del CVar de las nameplates (que quedaba cambiado).
+local KEEP_KEYS = { "dayNightAnchor", "dayNightDayLen", "dayNightNightLen",
+                    "silentNameplatesOriginal", "learnedSpells" }
+
+local function KeepState()
+    local keep = {}
+    for _, key in ipairs(KEEP_KEYS) do keep[key] = NS.db[key] end
+    return keep
+end
+
+local function RestoreState(keep)
+    for _, key in ipairs(KEEP_KEYS) do NS.db[key] = keep[key] end
+end
+
 NS.panel.cancel = function()
     if NS.snapshot and NS.db then
+        local keep = KeepState()
         for k in pairs(NS.db) do NS.db[k] = nil end
         for k, v in pairs(NS.snapshot) do NS.db[k] = NS.DeepCopy(v) end
+        RestoreState(keep)
         NS.snapshot = nil
         NS.ApplyAll()
+        NS.SetSilentNameplateMode(NS.db.silentNameplates)
         NS.Refresh()
     end
 end
 NS.panel.default = function()
     if not NS.db then return end
+    local keep = KeepState()
     for k in pairs(NS.db) do NS.db[k] = nil end
     NS.CopyDefaults(NS.DEFAULTS, NS.db)
+    RestoreState(keep)
     NS.ApplyAll()
+    NS.SetSilentNameplateMode(NS.db.silentNameplates)
     NS.Refresh()
 end
 NS.panel.refresh = NS.Refresh
@@ -315,7 +339,8 @@ end)
 SLASH_TUWOWQOL1 = "/twqol"
 SLASH_TUWOWQOL2 = "/tuwowqol"
 SlashCmdList["TUWOWQOL"] = function(msg)
-    local cmd = string.lower(string.match(msg or "", "^%s*(%S*)") or "")
+    local rawCmd, arg1, arg2 = string.match(msg or "", "^%s*(%S*)%s*(%S*)%s*(%S*)")
+    local cmd = string.lower(rawCmd or "")
     if cmd == "help" or cmd == "ayuda" then
         NS.ShowHelp()
     elseif cmd == "status" or cmd == "estado" then
@@ -334,6 +359,10 @@ SlashCmdList["TUWOWQOL"] = function(msg)
         if NS.db then NS.TestSync() end
     elseif cmd == "editar" or cmd == "ui" or cmd == "editor" then
         NS.OpenEditor()
+    elseif cmd == "ciclo" or cmd == "cycle" then
+        NS.CycleCommand(arg1, arg2)
+    elseif cmd == "ids" then
+        NS.ListLearnedSpells()
     else
         OpenConfig()
     end

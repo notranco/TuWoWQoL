@@ -8,22 +8,34 @@ function NS.AwayCheck(now, remaining)
     NS.lastAwayCheck = now
     if NS.ImmuneAt(NS.endTime or now) then return end
 
-    local idx = NS.db.wideRange and NS.NEAR_INDEX or NS.DANGER_INDEX
+    local wide = NS.db.wideRange
     local names, seen = {}, {}
-    for _, unit in ipairs(NS.GroupUnits()) do
-        if UnitExists(unit) and not UnitIsDeadOrGhost(unit) and CheckInteractDistance(unit, idx) then
-            local name = UnitName(unit)
-            local p = name and NS.people[name]
-            if name and not (p and (p.putrid or p.immune)) then
-                names[#names + 1] = name
-                seen[name] = true
-            end
+    -- Cualquier unidad conocida cuenta: grupo, nameplates (aunque esten ocultas), objetivo,
+    -- foco y cursor. Asi tambien avisa en mundo abierto, sin grupo.
+    local function consider(unit)
+        if not UnitExists(unit) or not UnitIsPlayer(unit) or UnitIsUnit(unit, "player")
+           or UnitIsDeadOrGhost(unit) then return end
+        local name = UnitName(unit)
+        if not name or seen[name] then return end
+        local p = NS.people[name]
+        if p and (p.putrid or p.immune) then return end
+        if NS.HasPutrid(unit) then return end -- ya tiene Putrefacto: no hay nada que contagiar
+        if NS.UnitWithinRadius(unit, wide) then
+            seen[name] = true
+            names[#names + 1] = name
         end
     end
+    NS.RefreshNameplateUnits()
+    for _, unit in ipairs(NS.GroupUnits()) do consider(unit) end
+    for unit in pairs(NS.nameplateUnits) do consider(unit) end
+    for _, unit in ipairs(NS.EXTRA_UNITS) do consider(unit) end
     -- usuarios fuera de grupo que confirmaron estar cerca (susurro "A")
     for name, t in pairs(NS.acks) do
         if now - t < 8 then
-            if not seen[name] then names[#names + 1] = name end
+            if not seen[name] then
+                seen[name] = true
+                names[#names + 1] = name
+            end
         else
             NS.acks[name] = nil
         end
@@ -36,6 +48,12 @@ function NS.AwayCheck(now, remaining)
         local list = table.concat(shown, ", ")
         if #names > 3 then list = list .. " y " .. (#names - 3) .. " más" end
         NS.ShowMsg("away", NS.Txt("away", { s = math.ceil(remaining), list = list }))
+    end
+
+    -- Opcional: avisar a los de cerca por /decir (una vez por cuenta regresiva)
+    if #names > 0 and NS.db.autoSay and not NS.saidAway and now - NS.lastSay >= 60 then
+        NS.saidAway, NS.lastSay = true, now
+        pcall(SendChatMessage, NS.Txt("sayAway", { s = math.ceil(remaining) }), "SAY")
     end
 end
 
@@ -53,7 +71,7 @@ local function TickPerson(name, p, now)
     end
     if p.vomitUntil and now > p.vomitUntil then p.vomitUntil = nil end
 
-    if p.vomitAt and not p.immune and not p.warnedImminent and NS.db.warnImminent and NS.IAmSafe() then
+    if p.vomitAt and not p.immune and not p.warnedImminent and NS.db.warnImminent and NS.CanBeInfected() then
         local rem = p.vomitAt - now
         if rem > 0 and rem <= (NS.db.alertSeconds or 10) then
             p.warnedImminent = true
@@ -74,6 +92,15 @@ function NS.RosterTick(now)
     for name, p in pairs(NS.people) do TickPerson(name, p, now) end
     for name, au in pairs(NS.addonUsers) do
         if now - (au.seen or 0) > 3600 then NS.addonUsers[name] = nil end
+    end
+    for key, t in pairs(NS.recentMsg) do
+        if now - t > 5 then NS.recentMsg[key] = nil end
+    end
+    for name, t in pairs(NS.nearCD) do
+        if now - t > 300 then NS.nearCD[name] = nil end
+    end
+    for name, t in pairs(NS.lastAck) do
+        if now - t > 300 then NS.lastAck[name] = nil end
     end
 end
 

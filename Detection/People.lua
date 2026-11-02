@@ -11,6 +11,8 @@ NS.EXTRA_UNITS = { "target", "focus", "mouseover" }
 -- Unidades que no generan eventos propios: se revisan una vez por segundo.
 NS.TARGET_TOKENS = { "targettarget", "focustarget", "mouseovertarget" }
 NS.DANGER_INDEX, NS.NEAR_INDEX = 3, 4 -- CheckInteractDistance: 3 = ~10 yd, 4 = ~28 yd
+NS.DANGER_YARDS, NS.NEAR_YARDS = 10, 28 -- radios que usa LibRangeCheck-3.0 si esta disponible
+NS.recentMsg = {} -- dedupe de mensajes de addon repetidos (grupo + /decir)
 
 -- Si sabes el spellId del vomito de otros jugadores, agregalo aca: [id] = true.
 -- Mientras tanto se reconoce por nombre del hechizo. Usa /twqol debug para ver ids.
@@ -39,8 +41,9 @@ function NS.Say(str)
     DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffTuWoW QoL:|r " .. str)
 end
 
--- true si yo no puedo contagiarme (ya tengo el debuff o Estomago de hierro)
-function NS.IAmSafe()
+-- true si yo PUEDO contagiarme (no tengo el debuff ni Estomago de hierro): solo entonces
+-- importan los avisos sobre otros jugadores.
+function NS.CanBeInfected()
     return not NS.hadDebuff and not NS.ImmuneAt(GetTime())
 end
 
@@ -105,46 +108,70 @@ function NS.SetSilentNameplateMode(enabled, restoreForLogout)
     if restoreForLogout then NS.RestoreSilentNameplates(true) end
 end
 
-function NS.FindUnit(name)
+-- Mapa nombre -> unidad armado una sola vez por pasada (el radar y los avisos preguntan
+-- por muchos jugadores seguidos y recorrer todas las unidades por cada uno era caro).
+local unitMap, unitMapAt = {}, -1
+function NS.BuildUnitMap(force)
+    local now = GetTime()
+    if not force and now - unitMapAt < 0.25 then return unitMap end
+    unitMapAt = now
+    wipe(unitMap)
     NS.RefreshNameplateUnits()
-    for _, unit in ipairs(NS.GroupUnits()) do
-        if UnitName(unit) == name then return unit end
-    end
-    for unit in pairs(NS.nameplateUnits) do
-        if UnitExists(unit) and UnitIsPlayer(unit) and UnitName(unit) == name then
-            return unit
+    local function add(unit)
+        if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsUnit(unit, "player") then
+            local name = UnitName(unit)
+            if name and not unitMap[name] then unitMap[name] = unit end
         end
     end
-    for _, unit in ipairs(NS.EXTRA_UNITS) do
-        if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsUnit(unit, "player")
-           and UnitName(unit) == name then
-            return unit
+    local members = NS.GroupUnits()
+    for _, unit in ipairs(members) do add(unit) end
+    for unit in pairs(NS.nameplateUnits) do add(unit) end
+    for _, unit in ipairs(NS.EXTRA_UNITS) do add(unit) end
+    for _, unit in ipairs(NS.TARGET_TOKENS) do add(unit) end
+    for _, member in ipairs(members) do add(member .. "target") end
+    return unitMap
+end
+
+function NS.FindUnit(name)
+    local unit = NS.BuildUnitMap()[name]
+    -- una unidad recien aparecida (nameplate, objetivo) todavia no esta en el cache
+    if not unit and GetTime() - unitMapAt > 0.1 then unit = NS.BuildUnitMap(true)[name] end
+    -- el token puede haber cambiado dentro de la ventana de cache
+    if unit and UnitExists(unit) and UnitName(unit) == name then return unit end
+end
+
+-- LibRangeCheck-3.0 es opcional: si algun addon la trae, las distancias son mas finas.
+local function RangeLib()
+    return LibStub and LibStub("LibRangeCheck-3.0", true) or nil
+end
+
+-- "danger" (~10 yd), "near" (~28 yd) o "far" segun la unidad
+function NS.UnitDistanceBand(unit)
+    local rc = RangeLib()
+    if rc then
+        local ok, lo, hi = pcall(rc.GetRange, rc, unit)
+        if ok and (lo or hi) then
+            if hi and hi <= NS.DANGER_YARDS then return "danger" end
+            if hi and hi <= NS.NEAR_YARDS then return "near" end
+            if lo and lo >= NS.NEAR_YARDS then return "far" end
         end
     end
-    for _, unit in ipairs(NS.TARGET_TOKENS) do
-        if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsUnit(unit, "player")
-           and UnitName(unit) == name then
-            return unit
-        end
-    end
-    for _, member in ipairs(NS.GroupUnits()) do
-        local unit = member .. "target"
-        if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsUnit(unit, "player")
-           and UnitName(unit) == name then
-            return unit
-        end
-    end
+    if CheckInteractDistance(unit, NS.DANGER_INDEX) then return "danger" end
+    if CheckInteractDistance(unit, NS.NEAR_INDEX) then return "near" end
+    return "far"
+end
+
+-- true si la unidad esta dentro del radio de contagio configurado
+function NS.UnitWithinRadius(unit, wide)
+    local band = NS.UnitDistanceBand(unit)
+    return band == "danger" or (wide and band == "near") or false
 end
 
 -- "danger" (~10 yd), "near" (~28 yd), "far" o "unknown" (no se puede medir)
 function NS.DistanceClass(name, p)
     if p and p.test then return "danger" end
     local unit = NS.FindUnit(name)
-    if unit then
-        if CheckInteractDistance(unit, NS.DANGER_INDEX) then return "danger" end
-        if CheckInteractDistance(unit, NS.NEAR_INDEX) then return "near" end
-        return "far"
-    end
+    if unit then return NS.UnitDistanceBand(unit) end
     -- Sin unitId: si nos hablo por SAY hace poco, esta en rango de /decir (~25 yd)
     if p and p.chan == "SAY" and p.chanAt and GetTime() - p.chanAt < 15 then return "near" end
     return "unknown"
@@ -178,7 +205,7 @@ function NS.SetEat(name, secs, src, est)
     p.vomitAt = now + secs
     p.est = est and true or false
     p.warnedImminent = nil
-    if NS.db.warnEat and NS.IAmSafe() and not p.immune and (not p.eatAlertAt or now - p.eatAlertAt > 5) then
+    if NS.db.warnEat and NS.CanBeInfected() and not p.immune and (not p.eatAlertAt or now - p.eatAlertAt > 5) then
         if NS.InAlertRange(NS.DistanceClass(name, p)) then
             p.eatAlertAt = now
             NS.ShowMsg("eat", NS.Txt("eat", { name = name, s = math.floor(secs + 0.5), est = est and "~" or "" }))
@@ -197,7 +224,7 @@ function NS.SetVomit(name, src)
     if already then return p end
     p.lastVomit = now
     p.vomitUntil = now + 4
-    if NS.db.warnTheirVomit and NS.IAmSafe() and not p.immune then
+    if NS.db.warnTheirVomit and NS.CanBeInfected() and not p.immune then
         if NS.InAlertRange(NS.DistanceClass(name, p)) then
             NS.ShowMsg("theirVomit", NS.Txt("theirVomit", { name = name }))
         end
@@ -265,7 +292,7 @@ function NS.AlertNearUnit(unit, now, seen)
     if not UnitExists(unit) or not UnitIsPlayer(unit) or UnitIsUnit(unit, "player")
        or UnitIsDeadOrGhost(unit) then return end
     if not NS.HasPutrid(unit) then return end
-    if not CheckInteractDistance(unit, NS.db.wideRange and NS.NEAR_INDEX or NS.DANGER_INDEX) then return end
+    if not NS.UnitWithinRadius(unit, NS.db.wideRange) then return end
     local name = UnitName(unit) or unit
     if seen then
         if seen[name] then return end

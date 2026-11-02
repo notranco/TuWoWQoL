@@ -73,6 +73,16 @@ local function LearnLength(phase, seconds)
     local db = GetDB()
     if not db or seconds < MIN_PHASE or seconds > MAX_PHASE then return end
     local key = phase == "day" and "dayNightDayLen" or "dayNightNightLen"
+    local otherKey = phase == "day" and "dayNightNightLen" or "dayNightDayLen"
+    -- El ciclo completo es fijo: dia + noche tiene que dar (casi) el total. Si no cierra, se
+    -- perdieron anuncios (por ejemplo por estar desconectado) y el valor no sirve.
+    local cycle = (tonumber(db.dayNightCycleMinutes) or 120) * 60
+    local other = ValidLen(db[otherKey])
+    if (other and math.abs(seconds + other - cycle) > cycle * 0.1)
+       or (not other and seconds > cycle - MIN_PHASE) then
+        Debug("ciclo: duración de " .. phase .. " descartada, no cierra con el ciclo (" .. math.floor(seconds) .. " s)")
+        return
+    end
     local old = ValidLen(db[key])
     -- Un valor muy distinto del conocido suele ser un anuncio perdido: se descarta.
     if old and (seconds < old * 0.65 or seconds > old * 1.35) then
@@ -267,6 +277,31 @@ function DN.ProcessMessage(message, event, sender, strict)
     state.warningSent = false
     Debug("ciclo: anuncio de " .. phase .. " (" .. tostring(event) .. (strict and ", hook" or "") .. ")")
     DN.Update()
+    if db.warnPhase ~= false and DN.showMessage and DN.getText then
+        local kind = phase == "night" and "nightStart" or "dayStart"
+        DN.showMessage(kind, DN.getText(kind))
+    end
+end
+
+-- Calibracion manual: la fase empezo hace `minutes` minutos (0 = recien empezo).
+function DN.Calibrate(phase, minutes)
+    local db = GetDB()
+    if not db or (phase ~= "day" and phase ~= "night") then return false end
+    local m = tonumber(minutes) or 0
+    db.dayNightAnchor = { phase = phase, at = time() - math.max(0, m) * 60 }
+    DN.state.warningSent = false
+    DN.state.lastMsgPhase = nil
+    DN.Update()
+    return true
+end
+
+-- Olvida el ancla y las duraciones aprendidas (se vuelve a sincronizar con el proximo anuncio).
+function DN.Reset()
+    local db = GetDB()
+    if not db then return end
+    db.dayNightAnchor, db.dayNightDayLen, db.dayNightNightLen = nil, nil, nil
+    DN.state.warningSent = false
+    DN.state.lastMsgPhase = nil
 end
 
 -- Respaldo: algunos anuncios del servidor no llegan por un evento de chat conocido
@@ -274,11 +309,15 @@ end
 function DN.InstallChatHook()
     if DN.hooked or not hooksecurefunc then return end
     DN.hooked = true
+    -- El combat log dispara el hook por cada linea y no recibe anuncios del servidor
+    local combatLog = _G.COMBATLOG or _G.ChatFrame2
     for i = 1, (NUM_CHAT_WINDOWS or 7) do
         local frame = _G["ChatFrame" .. i]
-        if frame and frame.AddMessage then
+        if frame and frame.AddMessage and frame ~= combatLog then
             hooksecurefunc(frame, "AddMessage", function(_, message)
-                if type(message) == "string" and string.find(message, "[Rr]abi") then
+                -- Un mensaje de jugador lleva el enlace |Hplayer: ; esos nunca valen (se podrian falsear)
+                if type(message) == "string" and not string.find(message, "|Hplayer:", 1, true)
+                   and string.find(message, "[Rr]abi") then
                     DN.HandleMessage(message, "ChatFrame", nil, true)
                 end
             end)
@@ -286,18 +325,31 @@ function DN.InstallChatHook()
     end
 end
 
+-- Con un icono nativo (ForeverUI / DayNightBar) el tooltip se engancha a ese icono y el boton
+-- propio no se muestra, asi no le tapa los clics. Solo si el icono nativo no recibe el mouse se
+-- deja un boton invisible encima para poder mostrar el tooltip.
 function DN.PlaceButton()
     local cycleButton = DN.iconButton
     if not cycleButton then return end
+    if DN.visible == false then
+        cycleButton:Hide()
+        return
+    end
     local reference = _G.ForeverUIMinimapDiel or DN.button or _G.DayNightBarMinimapButton
     cycleButton:ClearAllPoints()
     if reference and reference.IsShown and reference:IsShown() then
-        cycleButton:SetPoint("CENTER", reference, "CENTER", 0, 0)
         DN.iconTexture:SetAlpha(0)
+        if reference.IsMouseEnabled and reference:IsMouseEnabled() then
+            cycleButton:Hide()
+        else
+            cycleButton:SetPoint("CENTER", reference, "CENTER", 0, 0)
+            cycleButton:Show()
+        end
     else
         local angle = math.rad(45)
         cycleButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * 80, math.sin(angle) * 80)
         DN.iconTexture:SetAlpha(1)
+        cycleButton:Show()
     end
 end
 
@@ -314,7 +366,8 @@ function DN.RefreshTooltip(force)
     if force then
         if GameTooltip.SetOwner then GameTooltip:SetOwner(force, "ANCHOR_LEFT") end
     elseif not GameTooltip:IsShown()
-       or not (GameTooltip:IsOwned(DN.iconButton) or (DN.button and GameTooltip:IsOwned(DN.button))) then
+       or not (GameTooltip:IsOwned(DN.iconButton) or (DN.button and GameTooltip:IsOwned(DN.button))
+               or (DN.reference and GameTooltip:IsOwned(DN.reference))) then
         return
     end
     GameTooltip:ClearLines()
@@ -349,6 +402,19 @@ function DN.RefreshTooltip(force)
     GameTooltip:Show()
 end
 
+function DN.Describe()
+    local isDay, remaining, _, phaseSeconds, source = DN.GetCycleInfo()
+    if isDay == nil then
+        return "sin datos todavía; se sincroniza con el próximo anuncio del servidor. " ..
+            "Podés calibrar con /twqol ciclo dia|noche [minutos transcurridos]."
+    end
+    local dayLen, nightLen, learned = DN.GetLengths()
+    return string.format("%s, %s en %s (fuente: %s). Día %s / noche %s%s.",
+        isDay and "día" or "noche", isDay and "noche" or "día", DN.CycleTimeText(remaining),
+        string.lower(SOURCE_TEXT[source] or "reloj del juego"),
+        DN.CycleTimeText(dayLen), DN.CycleTimeText(nightLen), learned and "" or " (estimado)")
+end
+
 function DN.HookButton()
     local nativeCycle = _G.ForeverUIMinimapDiel
     if nativeCycle and DN.reference ~= nativeCycle then
@@ -356,6 +422,10 @@ function DN.HookButton()
         if nativeCycle.HookScript then
             nativeCycle:HookScript("OnShow", DN.PlaceButton)
             nativeCycle:HookScript("OnHide", DN.PlaceButton)
+            nativeCycle:HookScript("OnEnter", function(self) DN.RefreshTooltip(self) end)
+            nativeCycle:HookScript("OnLeave", function(self)
+                if GameTooltip and GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+            end)
         end
         DN.PlaceButton()
     end
@@ -384,12 +454,8 @@ DN.iconButton:SetScript("OnLeave", function(self)
 end)
 
 function DN.SetVisible(visible)
-    if visible then
-        DN.PlaceButton()
-        DN.iconButton:Show()
-    else
-        DN.iconButton:Hide()
-    end
+    DN.visible = visible and true or false
+    DN.PlaceButton()
 end
 
 function DN.Tick(now, elapsed)
@@ -398,6 +464,11 @@ function DN.Tick(now, elapsed)
     if not DN.reference and state.buttonCheckElapsed >= 1 then
         state.buttonCheckElapsed = 0
         DN.HookButton()
+    end
+    state.placeElapsed = (state.placeElapsed or 0) + elapsed
+    if state.placeElapsed >= 3 then
+        state.placeElapsed = 0
+        DN.PlaceButton() -- el icono nativo puede mostrarse u ocultarse sin avisar
     end
     state.elapsed = state.elapsed + elapsed
     if state.elapsed >= 1 then

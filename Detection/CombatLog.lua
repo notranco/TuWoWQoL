@@ -21,17 +21,44 @@ end
 
 local CLEU_AURA = { SPELL_AURA_APPLIED = true, SPELL_AURA_REMOVED = true, SPELL_AURA_REFRESH = true }
 
+-- Guarda en la DB los spellIds que se reconocieron como vomito por nombre. Sirven para completar
+-- NS.VOMIT_SPELL_IDS con datos reales del servidor (se ven con /twqol ids).
+function NS.LearnVomitSpell(spellId, spellName)
+    local db = NS.db
+    if not db or NS.VOMIT_SPELL_IDS[spellId] then return end
+    db.learnedSpells = db.learnedSpells or {}
+    if db.learnedSpells[spellId] then return end
+    local count = 0
+    for _ in pairs(db.learnedSpells) do count = count + 1 end
+    if count >= 50 then return end
+    db.learnedSpells[spellId] = spellName or "?"
+    if NS.debugOn then NS.Say("spellId de vómito aprendido: " .. spellId .. " (" .. tostring(spellName) .. ")") end
+end
+
+function NS.ListLearnedSpells()
+    local ids = {}
+    for id, name in pairs((NS.db and NS.db.learnedSpells) or {}) do ids[#ids + 1] = id end
+    table.sort(ids)
+    if #ids == 0 then
+        NS.Say("Todavía no se aprendió ningún spellId de vómito de otros jugadores.")
+        return
+    end
+    NS.Say("SpellIds de vómito vistos (agregalos a NS.VOMIT_SPELL_IDS):")
+    for _, id in ipairs(ids) do NS.Say("  [" .. id .. "] = true  -- " .. tostring(NS.db.learnedSpells[id])) end
+end
+
 local function ClassifySpell(spellId, spellName)
     local c = NS.spellClass[spellId]
     if c ~= nil then return c end
     c = false
-    if NS.VOMIT_SPELL_IDS[spellId] then
+    if NS.VOMIT_SPELL_IDS[spellId] or (NS.db and NS.db.learnedSpells and NS.db.learnedSpells[spellId]) then
         c = "vomit"
     elseif spellName then
         local lower = string.lower(spellName)
         for _, pat in ipairs(NS.VOMIT_NAME_PATTERNS) do
             if string.find(lower, pat, 1, true) then c = "vomit"; break end
         end
+        if c == "vomit" then NS.LearnVomitSpell(spellId, spellName) end
         if not c then
             for _, pat in ipairs(NS.POTION_PATTERNS) do
                 if string.find(lower, pat, 1, true) then c = "potion"; break end
@@ -49,7 +76,9 @@ end
 
 function NS.OnCombatLog(sub, srcName, srcFlags, dstName, dstFlags, spellId, spellName)
     if not spellId then return end
-    local me = UnitName("player")
+    -- el combat log dispara miles de eventos: se descarta lo que no sirve antes de cualquier trabajo
+    if not (CLEU_AURA[sub] or sub == "SPELL_CAST_SUCCESS") then return end
+    local me = NS.myName or UnitName("player")
 
     if CLEU_AURA[sub] then
         -- Aturdimiento (24919), ¡Vomitado! (49870) y Nauseabundo (49869): quien vomito es el

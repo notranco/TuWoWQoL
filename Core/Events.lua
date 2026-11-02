@@ -172,9 +172,12 @@ NS.f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, ar
                 TuWoWQoLDB.delay = 60
             end
             if v < 3 then TuWoWQoLDB.wideRange = false end -- contagio: ~10 yd
+            -- Sin esto la migracion se repetia en cada login (CopyDefaults no pisa el valor guardado)
+            if v < NS.DEFAULTS.cfgVersion then TuWoWQoLDB.cfgVersion = NS.DEFAULTS.cfgVersion end
         end
         NS.CopyDefaults(NS.DEFAULTS, TuWoWQoLDB)
         NS.db = TuWoWQoLDB
+        NS.myName = UnitName("player")
         TuWoWQoLDayNight.Configure(function() return NS.db end, NS.ShowMsg, NS.Txt, NS.Say, function() return NS.debugOn end)
         NS.SetSilentNameplateMode(NS.db.silentNameplates)
         NS.BuildOptions()
@@ -198,7 +201,11 @@ NS.f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, ar
         NS.selfVomited = NS.SelfVomitAura()
         NS.initialized = true
         for unit in pairs(NS.nameplateUnits) do NS.HandleUnitAura(unit) end
-        NS.helloAt = GetTime() + 4
+        -- El saludo de version solo en el primer ingreso (los cambios de grupo lo programan aparte)
+        if not NS.enteredOnce then
+            NS.enteredOnce = true
+            NS.helloAt = GetTime() + 4
+        end
 
     elseif event == "NAME_PLATE_UNIT_ADDED" then
         if type(arg1) == "string" then
@@ -245,7 +252,9 @@ NS.f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, ar
 
     elseif string.sub(event, 1, 8) == "CHAT_MSG" or string.sub(event, 1, 10) == "UI_INFO_ME"
            or string.sub(event, 1, 10) == "UI_ERROR_M" then
-        if DAYNIGHT_EVENTS[event] then TuWoWQoLDayNight.HandleMessage(arg1, event, arg2) end
+        -- El aviso de raid lo escribe un jugador: solo vale si llega sin emisor (mensaje del servidor)
+        local fromPlayer = event == "CHAT_MSG_RAID_WARNING" and arg2 and arg2 ~= ""
+        if DAYNIGHT_EVENTS[event] and not fromPlayer then TuWoWQoLDayNight.HandleMessage(arg1, event, arg2) end
         if event ~= "CHAT_MSG_RAID_WARNING" and event ~= "CHAT_MSG_MONSTER_YELL" then
             OnEatMessage(arg1, arg2, event)
         end

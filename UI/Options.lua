@@ -69,8 +69,8 @@ function NS.Note(parent, str, y)
     return fs
 end
 
-function NS.Check(parent, key, label, y, onChange)
-    local name = "TuWoWQoLCheck" .. key
+function NS.Check(parent, key, label, y, onChange, suffix)
+    local name = "TuWoWQoLCheck" .. key .. (suffix or "")
     local cb = CreateFrame("CheckButton", name, parent, "OptionsCheckButtonTemplate")
     cb:SetPoint("TOPLEFT", parent, "TOPLEFT", 18, y)
     local labelText = _G[name .. "Text"]
@@ -80,7 +80,11 @@ function NS.Check(parent, key, label, y, onChange)
     parent.labels = parent.labels or {}
     parent.labels[#parent.labels + 1] = labelText
     cb:EnableMouseWheel(true)
-    cb:SetScript("OnMouseWheel", function(_, delta) ScrollOptionsByWheel(parent:GetParent(), delta) end)
+    cb:SetScript("OnMouseWheel", function(_, delta)
+        -- Solo dentro de las paginas con scroll (en el editor el padre es UIParent)
+        local scroll = parent:GetParent()
+        if scroll and scroll.GetVerticalScroll then ScrollOptionsByWheel(scroll, delta) end
+    end)
     cb:SetScript("OnClick", function(self)
         if refreshing then return end
         NS.db[key] = self:GetChecked() and true or false
@@ -139,7 +143,7 @@ function NS.BuildOptions()
     title:SetText("TuWoW QoL")
     local sub = NS.panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-    sub:SetText("Mejoras de calidad de vida - módulo Putrefacto  (v" ..
+    sub:SetText("Mejoras de calidad de vida para TuWoW  (v" ..
         tostring(GetAddOnMetadata(ADDON, "Version") or "?") .. ")")
 
     local box = CreateFrame("Frame", nil, NS.panel)
@@ -165,7 +169,7 @@ function NS.BuildOptions()
         scroll:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -28, 8)
 
         local content = CreateFrame("Frame", nil, scroll)
-        content:SetHeight(440)
+        content:SetHeight(520)
         content.labels = {}
         scroll:SetScrollChild(content)
         scroll.content = content
@@ -225,15 +229,19 @@ function NS.BuildOptions()
     NS.Check(general, "sounds", "Activar sonidos", -40)
     NS.Check(general, "animations", "Activar animaciones", -66)
     NS.Check(general, "showMinimap", "Mostrar botón en el minimapa", -92, NS.ApplyMinimap)
-    NS.Header(general, "Interfaz", -134)
-    NS.Button(general, "Editar interfaz", 20, -160, 160, function() NS.OpenEditor() end)
-    NS.Button(general, "Restablecer posición", 200, -160, 170, NS.ResetPositions)
-    NS.Header(general, "Pruebas", -214)
-    NS.Button(general, "Probar aviso", 20, -240, 140, function() NS.Trigger(15, true) end)
-    NS.Button(general, "Probar contagio", 170, -240, 140, function()
-        NS.ShowMsg("contagion", "¡Jugador está Putrefacto y cerca tuyo!")
+    NS.Check(general, "showBar", "Mostrar barra de tiempo", -118, nil, "Opt")
+    NS.Check(general, "showRadar", "Mostrar radar (solo jugadores cercanos)", -144, nil, "Opt")
+    NS.Check(general, "radarAlways", "Radar visible aunque no haya nadie para listar", -170)
+    NS.Header(general, "Interfaz", -212)
+    NS.Button(general, "Editar interfaz", 20, -238, 160, function() NS.OpenEditor() end)
+    NS.Button(general, "Restablecer posición", 200, -238, 170, NS.ResetPositions)
+    NS.Header(general, "Pruebas", -292)
+    NS.Button(general, "Probar aviso", 20, -318, 140, function() NS.Trigger(15, true) end)
+    NS.Button(general, "Probar contagio", 170, -318, 140, function()
+        NS.ShowMsg("contagion", NS.Txt("near", { name = "Jugador" }))
     end)
-    NS.Note(general, "La prueba simula una cuenta regresiva de 15 segundos.", -272)
+    NS.Note(general, "La prueba simula una cuenta regresiva de 15 segundos. " ..
+        "El ciclo día/noche se consulta y calibra con /twqol ciclo.", -350)
 
     -- Avisos
     local warns = NewPage()
@@ -247,10 +255,11 @@ function NS.BuildOptions()
     NS.Check(warns, "warnApplied", "Avisar al recibir el debuff", -188)
     NS.Check(warns, "eatFallback", "Respaldo: detectar comida y pociones por buffs", -224)
     NS.Check(warns, "warnNight", "Avisar 5 minutos antes de la noche", -250)
+    NS.Check(warns, "warnPhase", "Banner al empezar la noche o el día (anuncio del servidor)", -276)
     NS.Note(warns, "La cuenta (60 s exactos) empieza cuando el servidor avisa que tu estómago putrefacto rechaza lo consumido. " ..
         "El respaldo solo sirve si ese mensaje no te llega. " ..
         "Si perdés el debuff durante la cuenta, se cancela. " ..
-        "Con Estómago de hierro solo se avisa si la inmunidad se va a acabar antes de que vomites.", -288)
+        "Con Estómago de hierro solo se avisa si la inmunidad se va a acabar antes de que vomites.", -318)
 
     -- Contagio
     local cont = NewPage()
@@ -271,6 +280,9 @@ function NS.BuildOptions()
         function() NS.SetSilentNameplateMode(NS.db.silentNameplates) end)
     NS.Note(cont, "El cliente solo expone unidades ajenas mediante grupo, objetivo, foco, cursor o nameplates. " ..
         "Este modo activa las placas amistosas para obtener sus unidades y las vuelve invisibles.", -366)
+    NS.Check(cont, "autoSay", "Avisar por /decir antes de vomitar si hay gente cerca (para quien no tiene el addon)", -420)
+    NS.Note(cont, "Dice una sola vez por cuenta regresiva y con un mínimo de 60 s entre avisos. " ..
+        "Revisá que las reglas del servidor permitan este tipo de mensajes.", -470)
 
     -- Sincronía
     local sync = NewPage()

@@ -48,6 +48,11 @@ NS.MSG = {
                   prio = 2, size = 28, anim = "pop" },
     away      = { color = { 1.00, 0.30, 0.30 }, icon = NS.ICON_DEBUFF, dur = 3, sound = "AlarmClockWarning3",
                   prio = 3, size = 26, anim = "pop", pulse = true },
+    -- Cambio de fase del ciclo dia/noche (anuncio del servidor)
+    nightStart = { color = { 1.00, 0.48, 0.12 }, icon = ICON_SKULL, dur = 6, sound = "RaidWarning",
+                   prio = 2, size = 26, anim = "pop", pulse = true },
+    dayStart  = { color = { 1.00, 0.85, 0.30 }, icon = "Interface\\Icons\\Spell_Holy_SearingLight", dur = 5,
+                  sound = "AlarmClockWarning2", prio = 1, size = 24, anim = "pop" },
 }
 
 NS.NEAR_COOLDOWN = 20 -- seg entre alertas de cercania por jugador
@@ -73,6 +78,10 @@ NS.DEFAULTS = {
     warnUnknown = false,  -- avisar aunque no se pueda medir la distancia
     silentNameplates = false, -- activar nameplates amistosos y ocultar las placas de jugadores
     warnNight = true,
+    warnPhase = true,     -- banner al empezar la noche / el dia (anuncio del servidor)
+    autoSay = false,      -- avisar por /decir "alejense" antes de vomitar (para quien no tiene el addon)
+    radarAlways = false,  -- mostrar el radar aunque no haya nadie para listar
+    learnedSpells = {},   -- spellIds de vomito aprendidos por nombre (ver /twqol ids)
     dayNightCycleMinutes = 120, -- duración real de un ciclo completo de 24 horas del juego
     dayNightSunrise = 360, -- 06:00 hora del juego
     dayNightSunset = 1200, -- 20:00 hora del juego
@@ -128,6 +137,9 @@ NS.TEXTS = {
     stPutrid = "Putrefacto",
     stImmune = "Putrefacto (inmune)",
     barText = "Vomitás en {s}s",
+    nightStart = "¡Cae la noche! Rabiar activo, loot x2 y +10% de experiencia",
+    dayStart = "Amanece: Rabiar inactivo",
+    sayAway = "¡Voy a vomitar en {s}s! ¡Aléjense!",
 }
 
 function NS.Txt(key, vars)
@@ -146,6 +158,8 @@ NS.endTime, NS.totalTime = nil, 60
 NS.warned10, NS.lastCount = false, nil
 NS.testing = false
 NS.hadDebuff, NS.wasEating = false, false
+NS.lastBarSec = nil
+NS.saidAway, NS.lastSay = false, -math.huge -- aviso por /decir (autoSay)
 -- Ultima vez que se vio el debuff en mi: evita repetir "Estas Putrefacto" cuando el servidor
 -- lo quita y lo vuelve a poner (refresco) sin que realmente haya pasado a estar sano.
 NS.lastPutridSeen = -math.huge

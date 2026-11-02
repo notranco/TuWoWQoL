@@ -9,6 +9,8 @@ function NS.Trigger(delay, isTest)
     NS.endTime = GetTime() + d
     NS.warned10 = d <= 10
     NS.lastCount = nil
+    NS.lastBarSec = nil
+    NS.saidAway = false
     if NS.db.warnStart and not NS.ImmuneAt(NS.endTime) then
         NS.ShowMsg("start", NS.Txt("start", { s = d }))
     end
@@ -19,6 +21,7 @@ function NS.CancelCountdown()
     if NS.endTime and not NS.testing then NS.Send("C") end
     NS.endTime = nil
     NS.testing = false
+    NS.saidAway = false
     NS.HideMsg()
 end
 
@@ -73,7 +76,12 @@ function NS.UpdateBar(now, elapsed)
         else
             NS.bar:SetStatusBarColor(0.9, 0.15, 0.15)
         end
-        NS.barText:SetText(NS.Txt("barText", { s = math.ceil(remaining) }))
+        -- el texto solo se rearma cuando cambia el segundo (Txt hace un gsub y crea strings)
+        local sec = math.ceil(remaining)
+        if sec ~= NS.lastBarSec then
+            NS.lastBarSec = sec
+            NS.barText:SetText(NS.Txt("barText", { s = sec }))
+        end
         NS.spark:ClearAllPoints()
         NS.spark:SetPoint("CENTER", NS.bar, "LEFT", NS.bar:GetWidth() * (remaining / NS.totalTime), 0)
         NS.spark:Show()
@@ -88,6 +96,7 @@ function NS.UpdateBar(now, elapsed)
         NS.bar:SetValue(0.6)
         NS.bar:SetStatusBarColor(0.25, 0.8, 0.25)
         NS.barText:SetText(NS.Txt("barText", { s = 42 }))
+        NS.lastBarSec = nil
         NS.spark:Hide()
         NS.glow:SetAlpha(0)
     end
