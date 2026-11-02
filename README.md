@@ -5,11 +5,13 @@ Addon experimental de calidad de vida para **TuWoW en World of Warcraft 3.3.5a**
 ## Funciones
 
 - Avisos y cuenta regresiva para Putrefacto y el vómito.
-- Alertas de contagio, comida, inmunidad y jugadores cercanos.
-- Sincronización de estado con otros usuarios del addon.
-- Radar opcional, botón de minimapa y editor de interfaz.
+- Alertas de contagio, comida, inmunidad y jugadores cercanos. La detección puede usar miembros del grupo, unidades seleccionadas o nameplates amistosas.
+- Opción experimental para activar las nameplates amistosas y ocultarlas visualmente mientras se detectan unidades.
+- Sincronización de estado con usuarios del addon por grupo/banda y, opcionalmente, por `/decir`.
+- Radar opcional, botón de minimapa y editor de interfaz para mover y ajustar los elementos.
+- Opciones con desplazamiento vertical para acceder a todos los ajustes.
 
-La detección depende de los hechizos y eventos que exponga el servidor. Puede ser incompleta; todavía requiere pruebas en TuWoW.
+La detección depende de los hechizos, eventos y unidades que exponga el servidor. Puede ser incompleta; las funciones experimentales requieren pruebas en TuWoW.
 
 ## Instalación
 
@@ -30,6 +32,6 @@ La detección depende de los hechizos y eventos que exponga el servidor. Puede s
 
 ## Estado
 
-Versión del addon: **0.5.1**. Esta publicación contiene cambios experimentales; verifica las detecciones dentro del servidor antes de depender de sus alertas.
+Versión del addon: **0.5.2**. Esta versión incluye mejoras experimentales de detección mediante nameplates y ajustes de la interfaz. Verifica las detecciones dentro del servidor antes de depender de sus alertas.
 
 El código se distribuye bajo la licencia [MIT](LICENSE).
