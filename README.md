@@ -44,21 +44,4 @@ La detección depende de los hechizos, eventos y unidades que exponga el servido
 
 Versión del addon: **0.7.0**. Correcciones del editor, de la migración de opciones y de las nameplates silenciosas; ciclo día/noche más robusto con calibración manual; avisos de "alejate" ampliados; mejoras de rendimiento.
 
-## Estructura
-
-Todos los archivos comparten una tabla de espacio de nombres (`local _, NS = ...`); el orden de carga está en `TuWoWQoL.toc`.
-
-- `Modules/DayNight.lua`: ciclo día/noche, botón del minimapa y tooltip.
-- `Core/Constants.lua`: constantes, estilos de mensaje, textos, valores por defecto y estado compartido.
-- `Core/Utilities.lua`: pruebas, estado y ayuda de los comandos.
-- `Core/Events.lua`: eventos, bucle principal y comandos `/twqol`.
-- `UI/Banner.lua`, `UI/Bar.lua`, `UI/Messages.lua`: aviso en pantalla, barra de tiempo y mensajes.
-- `UI/Radar.lua`: radar de contagio.
-- `UI/Minimap.lua`: botón de minimapa.
-- `UI/Options.lua`: panel en Interfaz > AddOns (con el scroll nativo de WoW).
-- `UI/Editor.lua`: editor de interfaz.
-- `Detection/Auras.lua`, `Detection/People.lua`, `Detection/CombatLog.lua`, `Detection/Contagion.lua`: detección de Putrefacto, jugadores cercanos, combat log y contagio.
-- `Sync/Sync.lua`: sincronización entre usuarios del addon.
-- `Logic/Countdown.lua`, `Logic/Maintenance.lua`: cuenta regresiva del vómito y tareas periódicas.
-
 El código se distribuye bajo la licencia [MIT](LICENSE).
