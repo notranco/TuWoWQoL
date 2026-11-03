@@ -172,6 +172,13 @@ NS.f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5, ar
                 TuWoWQoLDB.delay = 60
             end
             if v < 3 then TuWoWQoLDB.wideRange = false end -- contagio: ~10 yd
+            if v < 4 then
+                -- El ciclo de TuWoW es de 4 h: 2 h de día y 2 h de noche.
+                TuWoWQoLDB.dayNightCycleMinutes = 240
+                TuWoWQoLDB.dayNightSunrise, TuWoWQoLDB.dayNightSunset = 360, 1080
+                -- Las duraciones aprendidas con el ciclo anterior ya no aplican.
+                TuWoWQoLDB.dayNightDayLen, TuWoWQoLDB.dayNightNightLen = nil, nil
+            end
             -- Sin esto la migracion se repetia en cada login (CopyDefaults no pisa el valor guardado)
             if v < NS.DEFAULTS.cfgVersion then TuWoWQoLDB.cfgVersion = NS.DEFAULTS.cfgVersion end
         end

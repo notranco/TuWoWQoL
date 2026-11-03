@@ -3,8 +3,8 @@
 -- El servidor anuncia cada cambio de fase por chat. Ese anuncio es la referencia:
 -- se guarda con la hora real (time()) en la configuración, así sobrevive a
 -- relogueos y recargas de interfaz. A partir de ahí la fase se calcula con las
--- duraciones del día y de la noche, que el addon aprende al ver dos anuncios
--- seguidos (si todavía no las conoce usa 06:00-20:00 dentro del ciclo de 2 h).
+-- duraciones fijas de dos horas por fase. Cada anuncio vuelve a anclar la fase
+-- exacta; las duraciones no se infieren de intervalos locales, que pueden perderse.
 -- El reloj del juego solo se usa si se comprueba que va acelerado.
 TuWoWQoLDayNight = {}
 
@@ -14,8 +14,6 @@ DN.state = {
     buttonCheckElapsed = 0, lastMsgPhase = nil, lastMsgAt = 0, handling = false,
     clock = { mins = nil, changedAt = nil, fast = 0, slow = 0, secPerMin = nil },
 }
-
-local MIN_PHASE, MAX_PHASE = 300, 14400 -- segundos: rango razonable para una fase
 
 local function GetDB()
     return DN.getDB and DN.getDB()
@@ -46,51 +44,12 @@ end
 ---------------------------------------------------------------------
 -- Duraciones
 ---------------------------------------------------------------------
-local function ValidLen(v)
-    v = tonumber(v)
-    if v and v >= MIN_PHASE and v <= MAX_PHASE then return v end
-end
-
--- Devuelve segundos de día, segundos de noche y si fueron aprendidos del servidor.
+-- El servidor usa fases fijas: dos horas de día y dos horas de noche.
 function DN.GetLengths()
     local db = GetDB()
-    local cycle = (tonumber(db and db.dayNightCycleMinutes) or 120) * 60
-    if cycle < 2 * MIN_PHASE then cycle = 7200 end
-    local sunrise = (tonumber(db and db.dayNightSunrise) or 360) % 1440
-    local sunset = (tonumber(db and db.dayNightSunset) or 1200) % 1440
-    local dayDefault = cycle * ((sunset - sunrise) % 1440) / 1440
-    local nightDefault = cycle - dayDefault
-    local dayLen = ValidLen(db and db.dayNightDayLen)
-    local nightLen = ValidLen(db and db.dayNightNightLen)
-    if dayLen and nightLen then return dayLen, nightLen, true end
-    -- Con una sola fase conocida, la otra completa el ciclo de 2 horas.
-    if dayLen then return dayLen, ValidLen(cycle - dayLen) or nightDefault, false end
-    if nightLen then return ValidLen(cycle - nightLen) or dayDefault, nightLen, false end
-    return dayDefault, nightDefault, false
-end
-
-local function LearnLength(phase, seconds)
-    local db = GetDB()
-    if not db or seconds < MIN_PHASE or seconds > MAX_PHASE then return end
-    local key = phase == "day" and "dayNightDayLen" or "dayNightNightLen"
-    local otherKey = phase == "day" and "dayNightNightLen" or "dayNightDayLen"
-    -- El ciclo completo es fijo: dia + noche tiene que dar (casi) el total. Si no cierra, se
-    -- perdieron anuncios (por ejemplo por estar desconectado) y el valor no sirve.
-    local cycle = (tonumber(db.dayNightCycleMinutes) or 120) * 60
-    local other = ValidLen(db[otherKey])
-    if (other and math.abs(seconds + other - cycle) > cycle * 0.1)
-       or (not other and seconds > cycle - MIN_PHASE) then
-        Debug("ciclo: duración de " .. phase .. " descartada, no cierra con el ciclo (" .. math.floor(seconds) .. " s)")
-        return
-    end
-    local old = ValidLen(db[key])
-    -- Un valor muy distinto del conocido suele ser un anuncio perdido: se descarta.
-    if old and (seconds < old * 0.65 or seconds > old * 1.35) then
-        Debug("ciclo: duración de " .. phase .. " descartada (" .. math.floor(seconds) .. " s)")
-        return
-    end
-    db[key] = math.floor(seconds + 0.5)
-    Debug("ciclo: duración de " .. phase .. " = " .. db[key] .. " s")
+    local cycle = (tonumber(db and db.dayNightCycleMinutes) or 240) * 60
+    if cycle ~= 14400 then cycle = 14400 end
+    return cycle / 2, cycle / 2, true
 end
 
 ---------------------------------------------------------------------
@@ -174,7 +133,7 @@ function DN.GetCycleInfo()
         end
         return isDay, math.max(0, len - t), t, len, source
     end
-    return ClockInfo(GetTime())
+    return nil
 end
 
 function DN.Update()
@@ -270,9 +229,6 @@ function DN.ProcessMessage(message, event, sender, strict)
     state.lastMsgPhase, state.lastMsgAt = phase, nowT
 
     local prev = db.dayNightAnchor
-    if type(prev) == "table" and prev.phase and prev.phase ~= phase and tonumber(prev.at) then
-        LearnLength(prev.phase, nowT - prev.at)
-    end
     db.dayNightAnchor = { phase = phase, at = nowT }
     state.warningSent = false
     Debug("ciclo: anuncio de " .. phase .. " (" .. tostring(event) .. (strict and ", hook" or "") .. ")")
@@ -396,7 +352,7 @@ function DN.RefreshTooltip(force)
         local sourceText = SOURCE_TEXT[source] or "Reloj del juego"
         GameTooltip:AddDoubleLine("Fuente", sourceText, 0.1, 0.8, 1, 0.7, 0.7, 0.7)
         if source == "serverGuess" or source == "projectedGuess" then
-            GameTooltip:AddLine("La duración exacta se confirma al ver un día y una noche.", 0.6, 0.6, 0.6, true)
+            GameTooltip:AddLine("Fases fijas de dos horas desde el último anuncio.", 0.6, 0.6, 0.6, true)
         end
     end
     GameTooltip:Show()
